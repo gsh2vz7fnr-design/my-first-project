@@ -33,7 +33,11 @@
       "Bash(pip install:*)",
       "Bash(streamlit run:*)",
       "Bash(du:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\n清理不必要的文件和目录\n\n删除内容：\n- venv/ 和 node_modules/ 虚拟环境\n- output/ 和 assets/ 生成的临时文件\n- dist/ 构建输出\n- 临时 Python 脚本\n- .DS_Store 系统文件\n- 多个大型 PPT 文件\n\nCo-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git reflog:*)",
+      "Bash(git gc:*)",
+      "Bash(git commit:*)"
     ]
   }
 }
