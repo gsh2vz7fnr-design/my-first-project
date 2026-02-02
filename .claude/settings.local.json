@@ -31,7 +31,9 @@
       "Bash(pip3 list:*)",
       "Bash(source:*)",
       "Bash(pip install:*)",
-      "Bash(streamlit run:*)"
+      "Bash(streamlit run:*)",
+      "Bash(du:*)",
+      "Bash(git add:*)"
     ]
   }
 }
