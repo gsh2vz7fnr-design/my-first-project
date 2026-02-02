@@ -1,0 +1,37 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run:*)",
+      "Bash(npx vite:*)",
+      "Bash(ping:*)",
+      "Bash(git ls-remote:*)",
+      "Bash(bash:*)",
+      "Bash(python3 -m pip list:*)",
+      "Bash(python3:*)",
+      "Bash(tree:*)",
+      "Bash(git clone:*)",
+      "Bash(chmod:*)",
+      "Bash(./manage-skills.sh:*)",
+      "Bash(claude skill:*)",
+      "Bash(cd:*)",
+      "Bash(find:*)",
+      "Bash(grep:*)",
+      "Bash(wc:*)",
+      "Bash(npm install)",
+      "Bash(ls:*)",
+      "WebSearch",
+      "WebFetch(domain:docs.siliconflow.cn)",
+      "Bash(pip3 install:*)",
+      "Bash(ffmpeg:*)",
+      "Bash(curl:*)",
+      "Bash(node scripts/images2pptx.js:*)",
+      "Bash(node ~/.claude/skills/AIPPT-Enterprise/scripts/images2pptx.js:*)",
+      "WebFetch(domain:mp.weixin.qq.com)",
+      "Bash(python:*)",
+      "Bash(pip3 list:*)",
+      "Bash(source:*)",
+      "Bash(pip install:*)",
+      "Bash(streamlit run:*)"
+    ]
+  }
+}
