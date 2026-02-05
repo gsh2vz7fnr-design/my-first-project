@@ -1,0 +1,75 @@
+{
+  "发烧": {
+    "required": ["age_months", "temperature", "duration", "mental_state"],
+    "optional": ["accompanying_symptoms"],
+    "questions": {
+      "age_months": "请问宝宝现在多大了？（月龄）",
+      "temperature": "请问宝宝现在的体温是多少度？",
+      "duration": "发烧持续多久了？",
+      "mental_state": "宝宝的精神状态怎么样？是玩耍正常还是比较蔫？",
+      "accompanying_symptoms": "除了发烧，还有其他不舒服的地方吗？比如咳嗽、呕吐、皮疹等？"
+    }
+  },
+  "摔倒": {
+    "required": ["age_months", "mental_state", "fall_height"],
+    "optional": ["accompanying_symptoms"],
+    "questions": {
+      "age_months": "请问宝宝现在多大了？（月龄）",
+      "mental_state": "宝宝摔倒后的精神状态怎么样？有没有哭闹？",
+      "fall_height": "请问宝宝是从多高的地方摔下来的？（比如床上、沙发、楼梯等）",
+      "accompanying_symptoms": "摔倒后有没有出现呕吐、昏迷、抽搐等情况？"
+    }
+  },
+  "呕吐": {
+    "required": ["age_months", "duration", "frequency", "mental_state"],
+    "optional": ["accompanying_symptoms"],
+    "questions": {
+      "age_months": "请问宝宝现在多大了？（月龄）",
+      "duration": "呕吐持续多久了？",
+      "frequency": "呕吐的频率怎么样？大概多久吐一次？",
+      "mental_state": "宝宝的精神状态怎么样？",
+      "accompanying_symptoms": "除了呕吐，还有其他症状吗？比如发烧、腹泻、腹痛等？"
+    }
+  },
+  "腹泻": {
+    "required": ["age_months", "duration", "frequency"],
+    "optional": ["stool_character", "accompanying_symptoms"],
+    "questions": {
+      "age_months": "请问宝宝现在多大了？（月龄）",
+      "duration": "腹泻持续多久了？",
+      "frequency": "腹泻的频率怎么样？大概一天拉几次？",
+      "stool_character": "大便是什么样的？（比如水样、糊状、有黏液、有血等）",
+      "accompanying_symptoms": "除了腹泻，还有其他症状吗？比如发烧、呕吐、腹痛等？"
+    }
+  },
+  "咳嗽": {
+    "required": ["age_months", "duration", "cough_type"],
+    "optional": ["accompanying_symptoms"],
+    "questions": {
+      "age_months": "请问宝宝现在多大了？（月龄）",
+      "duration": "咳嗽持续多久了？",
+      "cough_type": "咳嗽是什么样的？（比如干咳、有痰、犬吠样咳嗽等）",
+      "accompanying_symptoms": "除了咳嗽，还有其他症状吗？比如发烧、流鼻涕、喘息等？"
+    }
+  },
+  "皮疹": {
+    "required": ["age_months", "rash_location", "rash_appearance"],
+    "optional": ["accompanying_symptoms"],
+    "questions": {
+      "age_months": "请问宝宝现在多大了？（月龄）",
+      "rash_location": "皮疹长在哪里？（比如脸上、身上、四肢等）",
+      "rash_appearance": "皮疹是什么样的？（比如红点、水泡、脱皮等）",
+      "accompanying_symptoms": "除了皮疹，还有其他症状吗？比如发烧、瘙痒等？"
+    }
+  },
+  "哭闹": {
+    "required": ["age_months", "duration", "cry_pattern"],
+    "optional": ["accompanying_symptoms"],
+    "questions": {
+      "age_months": "请问宝宝现在多大了？（月龄）",
+      "duration": "哭闹持续多久了？",
+      "cry_pattern": "哭闹是什么样的？（比如间歇性、持续性、尖叫样等）",
+      "accompanying_symptoms": "有没有发现其他异常？比如发烧、呕吐、腹胀等？"
+    }
+  }
+}
