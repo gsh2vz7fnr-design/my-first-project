@@ -1,0 +1,163 @@
+/**
+ * Pediatric Triage Assistant - Design System v2
+ * 基于产品需求的设计令牌
+ */
+
+:root {
+  /* ========================================
+   * 色彩系统 (Color Palette)
+   * ======================================== */
+
+  /* Brand Primary - 品牌主色 #3A86FF */
+  --primary-50: #E6F2FF;
+  --primary-100: #BAE0FF;
+  --primary-200: #7EC2FF;
+  --primary-300: #4DA3FF;
+  --primary-400: #3A86FF;  /* 品牌主色 */
+  --primary-500: #2B75F0;
+  --primary-600: #1A5BD9;
+  --primary-700: #0D4BB8;
+
+  /* Emergency Red - 警示红 #FF4D4F */
+  --emergency-50: #FFF1F0;  /* 警示背景 */
+  --emergency-100: #FFCCC7;
+  --emergency-200: #FF9A92;
+  --emergency-300: #FF756A;
+  --emergency-400: #FF5952;
+  --emergency-500: #FF4D4F;  /* 警示红 */
+  --emergency-600: #F53D3F;
+  --emergency-700: #CF282B;
+
+  /* Success Green - 成功绿 */
+  --success-50: #E6FFFB;
+  --success-500: #10B981;
+  --success-600: #059669;
+
+  /* Warning Amber - 警告琥珀 */
+  --warning-50: #FFFBEB;
+  --warning-500: #F59E0B;
+  --warning-600: #D97706;
+
+  /* Neutral Background - 全局背景 #F8FAFC */
+  --bg-primary: #F8FAFC;
+  --bg-card: #FFFFFF;
+  --bg-emergency: var(--emergency-50);
+  --bg-warning: var(--warning-50);
+  --bg-hover: #F1F5F9;
+
+  /* Text Colors */
+  --text-primary: #1E293B;   /* 主文字 */
+  --text-secondary: #64748B; /* 次要文字 */
+  --text-tertiary: #94A3B8;
+  --text-emergency: var(--emergency-600);
+  --text-inverse: #FFFFFF;
+
+  /* Border Colors */
+  --border-light: #E2E8F0;
+  --border-default: #CBD5E1;
+  --border-focus: var(--primary-400);
+
+  /* ========================================
+   * 圆角规范 (Radius)
+   * ======================================== */
+  --radius-sm: 8px;    /* Small - 标签Pills、快捷选项 */
+  --radius-md: 12px;   /* Medium - 交互 */
+  --radius-lg: 16px;   /* Large - 卡片 */
+  --radius-xl: 24px;   /* Extra Large - 大卡片、弹窗 */
+  --radius-capsule: 50px;
+
+  /* ========================================
+   * 阴影规范 (Shadows)
+   * ======================================== */
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.06);
+  --shadow-card: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+  --shadow-md: 0 8px 16px -4px rgba(0, 0, 0, 0.08);
+  --shadow-lg: 0 12px 24px -6px rgba(0, 0, 0, 0.1);
+  --shadow-emergency: 0 8px 20px rgba(255, 77, 79, 0.25);
+
+  /* ========================================
+   * 字体与排版 (Typography)
+   * ======================================== */
+  --font-sans: system-ui, -apple-system, "SF Pro Display", "PingFang SC", sans-serif;
+
+  /* H1 (主标题): 20px / Semibold */
+  --text-h1: 1.25rem;     /* 20px */
+  --text-h1-weight: 600;
+
+  /* Body (正文): 16px / Regular */
+  --text-body: 1rem;      /* 16px */
+  --text-body-weight: 400;
+
+  /* Caption (辅助): 12px / Regular */
+  --text-caption: 0.75rem; /* 12px */
+  --text-caption-weight: 400;
+
+  /* ========================================
+   * 间距系统
+   * ======================================== */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* ========================================
+   * 过渡动画
+   * ======================================== */
+  --duration-fast: 150ms;
+  --duration-normal: 200ms;
+  --duration-slow: 300ms;
+
+  --easing-default: cubic-bezier(0.4, 0, 0.2, 1);
+  --easing-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* ========================================
+   * Z-index 层级
+   * ======================================== */
+  --z-backdrop: 1000;
+  --z-sidebar: 1010;
+  --z-modal: 1050;
+  --z-emergency: 1100;
+  --z-disclaimer: 2000;
+
+  /* ========================================
+   * 断点
+   * ======================================== */
+  --breakpoint-sm: 480px;
+  --breakpoint-md: 768px;
+  --breakpoint-lg: 1024px;
+
+  /* ========================================
+   * 安全区域 (iOS Safe Area)
+   * ======================================== */
+  --safe-area-inset-bottom: env(safe-area-inset-bottom, 20px);
+}
+
+/* ========================================
+ * 暗黑模式支持（预留）
+ * ========================================
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg-primary: #0F172A;
+    --bg-card: #1E293B;
+    --text-primary: #F1F5F9;
+    --text-secondary: #94A3B8;
+  }
+}
+======================================= */
+
+/* ========================================
+ * 减少动画模式支持（无障碍）
+ * ========================================
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+======================================= */

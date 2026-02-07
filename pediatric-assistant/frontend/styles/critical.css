@@ -1,0 +1,253 @@
+/**
+ * Critical CSS - 首屏渲染优化
+ * 这些样式会内联到HTML中，确保首屏快速显示
+ */
+
+/* 基础重置和字体 */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: system-ui, -apple-system, "SF Pro Text", "Helvetica Neue", sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+  color: #0F172A;
+  background: #F8FAFC;
+  min-height: 100vh;
+}
+
+/* 应用容器 */
+.app {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  min-height: 100vh;
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+/* 头部 */
+.app-header {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  background: #FFFFFF;
+  border: 1px solid #E2E8F0;
+  border-radius: 16px;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+}
+
+/* 品牌标识 */
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.brand-mark {
+  width: 48px;
+  height: 48px;
+  background: linear-gradient(135deg, #0EA5E9, #0284C7);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-size: 24px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.brand-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: #0F172A;
+}
+
+.brand-subtitle {
+  font-size: 12px;
+  color: #64748B;
+}
+
+/* 标签页导航 */
+.header-tabs {
+  display: flex;
+  gap: 8px;
+  padding: 4px;
+  background: #F1F5F9;
+  border-radius: 12px;
+}
+
+.header-tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  border: none;
+  background: transparent;
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 500;
+  color: #64748B;
+  transition: all 150ms ease;
+  min-height: 44px; /* iOS触摸标准 */
+}
+
+.header-tab:hover {
+  background: white;
+  color: #0EA5E9;
+}
+
+.header-tab.active {
+  background: white;
+  color: #0EA5E9;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  font-weight: 600;
+}
+
+/* 聊天区域 */
+.chat {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* 消息气泡 */
+.message {
+  display: flex;
+  gap: 12px;
+  animation: message-in 0.3s ease;
+}
+
+@keyframes message-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.message.user {
+  justify-content: flex-end;
+}
+
+.message.assistant {
+  justify-content: flex-start;
+}
+
+.bubble {
+  max-width: 80%;
+  padding: 12px 16px;
+  border-radius: 16px;
+  font-size: 15px;
+  line-height: 1.6;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
+.message.user .bubble {
+  background: linear-gradient(135deg, #0EA5E9, #0284C7);
+  color: white;
+  border-bottom-right-radius: 4px;
+}
+
+.message.assistant .bubble {
+  background: #F1F5F9;
+  color: #0F172A;
+  border-bottom-left-radius: 4px;
+}
+
+/* 输入区域 */
+.composer {
+  display: flex;
+  gap: 12px;
+  padding: 16px;
+  background: #FFFFFF;
+  border: 1px solid #E2E8F0;
+  border-radius: 16px;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+}
+
+.composer-input {
+  flex: 1;
+  padding: 12px 16px;
+  border: 1px solid #E2E8F0;
+  border-radius: 12px;
+  font-size: 16px; /* 防止iOS自动缩放 */
+  outline: none;
+  transition: border-color 150ms ease;
+  min-height: 44px;
+}
+
+.composer-input:focus {
+  border-color: #0EA5E9;
+  box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.1);
+}
+
+.composer-send {
+  padding: 12px 24px;
+  background: linear-gradient(135deg, #0EA5E9, #0284C7);
+  color: white;
+  border: none;
+  border-radius: 12px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  min-height: 44px;
+  transition: transform 150ms ease;
+}
+
+.composer-send:active {
+  transform: scale(0.95);
+}
+
+/* 移动端优化 */
+@media (max-width: 480px) {
+  .app {
+    padding: 8px;
+  }
+
+  .app-header {
+    padding: 12px;
+  }
+
+  .chat {
+    padding: 12px;
+  }
+
+  .bubble {
+    max-width: 90%;
+  }
+
+  .composer {
+    padding: 12px;
+  }
+
+  .brand-mark {
+    width: 40px;
+    height: 40px;
+    font-size: 20px;
+  }
+
+  .brand-title {
+    font-size: 16px;
+  }
+
+  .header-tab {
+    padding: 8px 16px;
+    font-size: 14px;
+  }
+}
