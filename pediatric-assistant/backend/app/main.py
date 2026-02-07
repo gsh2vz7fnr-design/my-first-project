@@ -6,9 +6,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from loguru import logger
 import time
+import asyncio
 
 from app.config import settings
 from app.routers import chat, profile
+from app.services.profile_service import profile_service
+from app.services.conversation_service import conversation_service
+from app.middleware.performance import performance_monitor
 
 # 创建FastAPI应用
 app = FastAPI(
@@ -28,28 +32,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-# 请求日志中间件
-@app.middleware("http")
-async def log_requests(request: Request, call_next):
-    """记录所有请求"""
-    start_time = time.time()
-
-    # 记录请求
-    logger.info(f"Request: {request.method} {request.url.path}")
-
-    # 处理请求
-    response = await call_next(request)
-
-    # 计算处理时间
-    process_time = time.time() - start_time
-    logger.info(
-        f"Response: {response.status_code} | "
-        f"Time: {process_time:.3f}s | "
-        f"Path: {request.url.path}"
-    )
-
-    return response
+# 性能监控中间件
+app.middleware("http")(performance_monitor.log_request)
 
 
 # 全局异常处理
@@ -88,18 +72,46 @@ async def health_check():
     return {"status": "healthy"}
 
 
+@app.get("/metrics/performance")
+async def get_performance_metrics():
+    """获取性能指标"""
+    return {
+        "code": 0,
+        "data": performance_monitor.get_statistics(),
+    }
+
+
+@app.get("/metrics/performance/summary")
+async def get_performance_summary():
+    """获取性能指标摘要"""
+    return {
+        "code": 0,
+        "data": performance_monitor.get_summary(),
+    }
+
+
 @app.on_event("startup")
 async def startup_event():
     """应用启动事件"""
     logger.info(f"{settings.APP_NAME} v{settings.APP_VERSION} 启动中...")
     logger.info(f"调试模式: {settings.DEBUG}")
-    logger.info(f"大模型: {settings.QWEN_MODEL}")
+    logger.info(f"大模型: {settings.DEEPSEEK_MODEL}")
+    if not settings.DEEPSEEK_API_KEY:
+        logger.warning("未配置 DEEPSEEK_API_KEY，LLM/RAG 调用将失败")
+    profile_service.init_db()
+    conversation_service.init_db()
+    
+    # 启动后台任务工作线程
+    asyncio.create_task(profile_service.start_worker())
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """应用关闭事件"""
     logger.info(f"{settings.APP_NAME} 正在关闭...")
+
+    # Print performance statistics
+    performance_monitor.print_statistics()
 
 
 if __name__ == "__main__":

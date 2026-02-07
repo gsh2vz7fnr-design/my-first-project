@@ -6,7 +6,7 @@ from typing import Tuple, Optional, List
 from loguru import logger
 
 from app.config import settings
-from app.models.user import SafetyCheckResult
+from app.models.user import SafetyCheckResult, StreamSafetyResult
 
 
 class SafetyFilter:
@@ -98,6 +98,30 @@ class SafetyFilter:
             fallback_message=None
         )
 
+    async def check_safety(self, user_input: str) -> dict:
+        """
+        Check safety for user input.
+
+        Returns:
+            dict: {"action": "allow"} or {"action": "block", "reason": str, "message": str}
+        """
+        if self.check_prescription_intent(user_input):
+            return {
+                "action": "block",
+                "reason": "prescription_intent",
+                "message": self.get_prescription_refusal_message(),
+            }
+
+        result = self.filter_output(user_input)
+        if not result.is_safe:
+            return {
+                "action": "block",
+                "reason": f"{result.category}_blacklist",
+                "message": result.fallback_message,
+            }
+
+        return {"action": "allow"}
+
     def _check_keywords(self, text: str, keywords: List[str]) -> List[str]:
         """
         检查文本中是否包含关键词
@@ -166,6 +190,56 @@ class SafetyFilter:
             return text
 
         return text + disclaimer
+
+    def check_stream_output(self, chunk: str, buffer: str = "") -> StreamSafetyResult:
+        """
+        检查流式输出块是否包含违禁词
+
+        Args:
+            chunk: 当前输出块
+            buffer: 累积的输出缓冲区
+
+        Returns:
+            StreamSafetyResult: 流式安全检查结果
+        """
+        # 将chunk追加到buffer中进行检查
+        combined_text = buffer + chunk
+
+        # 检查通用黑名单
+        matched_general = self._check_keywords(combined_text, self.general_blacklist)
+        if matched_general:
+            return StreamSafetyResult(
+                should_abort=True,
+                matched_keyword=matched_general[0],
+                category="general",
+                fallback_message=(
+                    "抱歉，我无法回答该问题。作为一个儿科健康助手，"
+                    "我只专注于解答儿童护理与健康相关的咨询。"
+                )
+            )
+
+        # 检查医疗黑名单
+        matched_medical = self._check_keywords(combined_text, self.medical_blacklist)
+        if matched_medical:
+            return StreamSafetyResult(
+                should_abort=True,
+                matched_keyword=matched_medical[0],
+                category="medical",
+                fallback_message=(
+                    "⚠️ 安全警示：基于安全风控原则，该回复已被系统拦截。\n\n"
+                    "为了宝宝的安全，我们严禁推荐该类药物/疗法，或做出确诊性判断。\n"
+                    "请您务必通过正规医院就诊，切勿轻信非专业建议。\n\n"
+                    "如遇紧急情况，请立即拨打 120。"
+                )
+            )
+
+        # 未检测到违禁词
+        return StreamSafetyResult(
+            should_abort=False,
+            matched_keyword=None,
+            category=None,
+            fallback_message=None
+        )
 
 
 # 创建全局实例

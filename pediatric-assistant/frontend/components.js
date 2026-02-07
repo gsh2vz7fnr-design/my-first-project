@@ -104,7 +104,7 @@ function createHeader() {
             <line x1="3" y1="18" x2="21" y2="18"></line>
           </svg>
         </button>
-        <h1 class="header-brand">儿科助手</h1>
+        <h1 class="header-brand">智能儿科助手</h1>
       </div>
 
       <!-- 右侧：操作按钮 -->
@@ -128,10 +128,6 @@ function createHeader() {
         <button class="header-tab" data-tab="health">
           <span class="tab-icon">🩺</span>
           <span class="tab-label">健康</span>
-        </button>
-        <button class="header-tab" data-tab="profile">
-          <span class="tab-icon">📋</span>
-          <span class="tab-label">档案</span>
         </button>
       </nav>
     </div>
@@ -173,36 +169,6 @@ function createTabs(onTabChange) {
   return {
     element: document.createElement("div"), // Empty element (tabs are in header)
     onTabChange,
-  };
-}
-
-function createPendingPanel() {
-  const section = document.createElement("section");
-  section.className = "profile-panel";
-
-  section.innerHTML = `
-    <div class="panel-header">
-      <div>
-        <div class="panel-title">档案待确认</div>
-        <div class="panel-subtitle">仅收集用户明确表述的信息</div>
-      </div>
-      <div class="panel-actions">
-        <input id="user-id" class="panel-input" type="text" value="test_user_001" />
-        <button class="panel-button" id="refresh-pending">刷新</button>
-      </div>
-    </div>
-    <div class="panel-body" id="pending-list">
-      <div class="panel-empty">暂无待确认内容</div>
-    </div>
-  `;
-
-  return {
-    el: section,
-    refs: {
-      pendingList: section.querySelector("#pending-list"),
-      refreshButton: section.querySelector("#refresh-pending"),
-      userIdInput: section.querySelector("#user-id"),
-    },
   };
 }
 
@@ -327,13 +293,7 @@ function createWelcomeScreen() {
     </div>
 
     <div class="chat-welcome-header">
-      <h1 class="chat-welcome-title">智能儿科分诊与护理助手</h1>
-      <p class="chat-welcome-subtitle">7×24小时 为您提供科学育儿建议</p>
-    </div>
-
-    <div class="chat-welcome-disclaimer">
-      <strong>⚠️ 重要提示：</strong>本系统仅供参考，不能替代专业医疗诊断。
-      如遇紧急情况，请立即就医或拨打120。
+      <h1 class="chat-welcome-title">智能儿科助手</h1>
     </div>
 
     <div class="chat-welcome-suggestions">
@@ -351,7 +311,6 @@ function createWelcomeScreen() {
             aria-label="${s.title}：${s.example}"
             style="--card-color: ${s.color}; --card-bg: ${s.bg};"
           >
-            <span class="suggestion-card__icon" aria-hidden="true">${s.icon}</span>
             <div class="suggestion-card__content">
               <div class="suggestion-card__title">${s.title}</div>
               <div class="suggestion-card__example">${s.example}</div>
@@ -410,11 +369,15 @@ function createComposer() {
   footer.setAttribute("role", "form");
   footer.setAttribute("aria-label", "消息输入框");
 
-  footer.innerHTML = `
+  // Input wrapper for layout
+  const inputWrapper = document.createElement("div");
+  inputWrapper.className = "composer-input-wrapper";
+
+  inputWrapper.innerHTML = `
     <input
       class="composer-input"
       type="text"
-      placeholder="请描述症状（AI 建议仅供参考，急症请直接就医）"
+      placeholder="请描述症状..."
       aria-label="输入您的消息"
       aria-describedby="composer-hint"
     />
@@ -422,11 +385,14 @@ function createComposer() {
       发送
     </button>
   `;
+
   const hint = document.createElement("div");
   hint.className = "composer-hint";
   hint.id = "composer-hint";
   hint.textContent = "提示：可直接输入「发烧39度，精神蔫」，系统会引导补全信息。";
   hint.setAttribute("aria-live", "polite");
+
+  footer.appendChild(inputWrapper);
   footer.appendChild(hint);
 
   return {
@@ -773,6 +739,73 @@ function showPersistentEmergencyBanner() {
 }
 
 /**
+ * Create a slot tracker (progress bar replacement)
+ * @param {Array} slots - Array of slot objects { key, label, status, value }
+ * @returns {Object} - Element and update method
+ */
+function createSlotTracker(slots) {
+  const container = document.createElement("div");
+  container.className = "slot-tracker";
+  
+  const render = (currentSlots) => {
+    container.innerHTML = currentSlots.map(slot => {
+      let statusClass = slot.status || "waiting";
+      let icon = "";
+      if (statusClass === "completed") icon = '<span class="slot-icon">✓</span>';
+      
+      return `
+        <div class="slot-card ${statusClass}">
+          <div class="slot-label">${icon}${slot.label}</div>
+          <div class="slot-value">${slot.value || (statusClass === "waiting" ? "Waiting" : "Current")}</div>
+        </div>
+      `;
+    }).join("");
+  };
+
+  render(slots);
+
+  return {
+    element: container,
+    update: render
+  };
+}
+
+/**
+ * Create quick reply chips
+ * @param {Array} chips - Array of strings
+ * @param {Function} onSelect - Callback(chipValue)
+ * @returns {Object} - Element and update method
+ */
+function createQuickReplies(chips, onSelect) {
+  const container = document.createElement("div");
+  container.className = "quick-replies";
+
+  const render = (currentChips) => {
+    container.innerHTML = "";
+    if (!currentChips || currentChips.length === 0) {
+      container.style.display = "none";
+      return;
+    }
+    container.style.display = "flex";
+    
+    currentChips.forEach(chip => {
+      const btn = document.createElement("button");
+      btn.className = "reply-chip";
+      btn.textContent = chip;
+      btn.addEventListener("click", () => onSelect(chip));
+      container.appendChild(btn);
+    });
+  };
+
+  render(chips);
+
+  return {
+    element: container,
+    update: render
+  };
+}
+
+/**
  * Create a follow-up form for collecting missing information
  * @param {Object} missingSlots - Missing slot definitions
  * @param {Function} onSubmit - Callback when form is submitted
@@ -780,28 +813,11 @@ function showPersistentEmergencyBanner() {
  */
 function createFollowUpForm(missingSlots, onSubmit) {
   const form = document.createElement("div");
-  form.className = "follow-up-form";
+  form.className = "follow-up-form inline-form"; // Added inline-form class
 
   // Count total steps
   const slotKeys = Object.keys(missingSlots);
-  const totalSteps = slotKeys.length;
-  let currentStep = 0;
-
-  // Build form header with progress
-  const header = document.createElement("div");
-  header.className = "form-header";
-  header.innerHTML = `
-    <div class="form-title">请补充以下信息</div>
-    <div class="form-progress">
-      <div class="form-progress-bar">
-        <div class="form-progress-fill" style="width: ${((currentStep + 1) / totalSteps) * 100}%"></div>
-      </div>
-      <div class="form-progress-text">步骤 ${currentStep + 1} / ${totalSteps}</div>
-    </div>
-  `;
-
-  form.appendChild(header);
-
+  
   // Build form fields
   const fieldsContainer = document.createElement("div");
   fieldsContainer.className = "form-fields";
@@ -930,6 +946,8 @@ function createFollowUpForm(missingSlots, onSubmit) {
   cancelBtn.textContent = "取消";
   cancelBtn.addEventListener("click", () => {
     form.remove();
+    // Dispatch event to clear progress bar
+    window.dispatchEvent(new CustomEvent("form-cancelled"));
   });
 
   actions.appendChild(cancelBtn);
@@ -1301,39 +1319,12 @@ function createHealthDashboard() {
     </div>
   `;
 
-  // 创建底部健康工具栏
-  const toolbar = document.createElement("div");
-  toolbar.className = "health-toolbar";
-  toolbar.innerHTML = `
-    <button class="health-tool" data-tool="medical-search">
-      <span class="health-tool__icon">📚</span>
-      <span class="health-tool__label">医典自查</span>
-    </button>
-    <button class="health-tool" data-tool="photo-upload">
-      <span class="health-tool__icon">📷</span>
-      <span class="health-tool__label">拍拍上传</span>
-    </button>
-    <button class="health-tool" data-tool="period-tracker">
-      <span class="health-tool__icon">📅</span>
-      <span class="health-tool__label">记经期</span>
-    </button>
-    <button class="health-tool" data-tool="smart-device">
-      <span class="health-tool__icon">⌚</span>
-      <span class="health-tool__label">智能设备</span>
-    </button>
-    <button class="health-tool" data-tool="health-data">
-      <span class="health-tool__icon">📊</span>
-      <span class="health-tool__label">健康数据</span>
-    </button>
-  `;
-
   dashboard.appendChild(bmiSection);
   dashboard.appendChild(metricsGrid);
   dashboard.appendChild(deviceBanner);
   dashboard.appendChild(recordGrid);
   dashboard.appendChild(habitSection);
   dashboard.appendChild(historySection);
-  dashboard.appendChild(toolbar);
 
   return {
     element: dashboard,
@@ -2004,7 +1995,6 @@ function createMemberProfileForm() {
 window.createDisclaimerModal = createDisclaimerModal;
 window.createHeader = createHeader;
 window.createTabs = createTabs;
-window.createPendingPanel = createPendingPanel;
 window.createChat = createChat;
 window.createWelcomeScreen = createWelcomeScreen;
 window.createChatBubble = createChatBubble;
@@ -2013,6 +2003,8 @@ window.createSourceSheet = createSourceSheet;
 window.createStreamBubble = createStreamBubble;
 window.createTriageResultCard = createTriageResultCard;
 window.createDangerSignalModal = createDangerSignalModal;
+window.createSlotTracker = createSlotTracker;
+window.createQuickReplies = createQuickReplies;
 window.createFollowUpForm = createFollowUpForm;
 window.createConversationSidebar = createConversationSidebar;
 window.createHealthDashboard = createHealthDashboard;

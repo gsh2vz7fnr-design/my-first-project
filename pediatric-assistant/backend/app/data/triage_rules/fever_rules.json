@@ -1,0 +1,47 @@
+{
+  "rules": [
+    {
+      "priority": 1,
+      "conditions": {
+        "age_months": {"lt": 3}
+      },
+      "decision": {
+        "level": "emergency",
+        "reason": "3个月以下婴儿发烧属于高危情况",
+        "action": "⚠️ 请立即前往医院就诊！3个月以下婴儿发烧可能提示严重感染，需要医生评估。"
+      }
+    },
+    {
+      "priority": 2,
+      "conditions": {
+        "temperature": {"gte": 39.0},
+        "mental_state": {"contains": "萎靡"}
+      },
+      "decision": {
+        "level": "emergency",
+        "reason": "高热且精神状态不佳",
+        "action": "⚠️ 建议尽快就医！宝宝高热且精神萎靡，需要医生评估是否有严重感染。"
+      }
+    },
+    {
+      "priority": 3,
+      "conditions": {
+        "duration_hours": {"gte": 48}
+      },
+      "decision": {
+        "level": "emergency",
+        "reason": "持续高热超过48小时",
+        "action": "建议前往医院就诊。持续高热可能需要进一步检查。"
+      }
+    },
+    {
+      "priority": 99,
+      "conditions": {},
+      "decision": {
+        "level": "observe",
+        "reason": "一般发烧，精神状态尚可",
+        "action": "可以先在家观察，注意物理降温和补液。如果出现以下情况请立即就医：\n1. 体温超过39.5℃且持续不退\n2. 精神萎靡、嗜睡、难以唤醒\n3. 出现抽搐、惊厥\n4. 持续高热超过48小时"
+      }
+    }
+  ]
+}

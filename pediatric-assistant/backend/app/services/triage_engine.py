@@ -16,6 +16,31 @@ class TriageEngine:
         """初始化"""
         self.danger_signals = self._load_danger_signals()
         self.slot_definitions = self._load_slot_definitions()
+        self.rules = self._load_symptom_rules()
+
+    def _load_symptom_rules(self) -> Dict[str, List[Dict[str, Any]]]:
+        """加载症状分诊规则"""
+        rules = {}
+        rules_dir = settings.TRIAGE_RULES_PATH
+        if not rules_dir:
+             rules_dir = "app/data/triage_rules"
+             
+        import os
+        for filename in os.listdir(rules_dir):
+            if filename.endswith("_rules.json"):
+                symptom_key = filename.replace("_rules.json", "")
+                # 简单的映射：fever -> 发烧
+                if symptom_key == "fever": symptom_map = "发烧"
+                elif symptom_key == "fall": symptom_map = "摔倒"
+                else: symptom_map = symptom_key
+                
+                try:
+                    with open(os.path.join(rules_dir, filename), "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                        rules[symptom_map] = sorted(data.get("rules", []), key=lambda x: x["priority"])
+                except Exception as e:
+                    logger.error(f"加载规则失败 {filename}: {e}")
+        return rules
 
     def _load_danger_signals(self) -> Dict[str, Any]:
         """加载危险信号配置"""
@@ -38,10 +63,10 @@ class TriageEngine:
     def check_danger_signals(self, entities: Dict[str, Any]) -> Optional[str]:
         """
         检查危险信号
-
+        
         Args:
             entities: 提取的实体
-
+            
         Returns:
             Optional[str]: 如果检测到危险信号，返回告警文案；否则返回None
         """
@@ -59,48 +84,163 @@ class TriageEngine:
         # 检查症状特定的危险信号
         if symptom in self.danger_signals.get("symptom_specific", {}):
             symptom_signals = self.danger_signals["symptom_specific"][symptom]
-
+            
             for signal in symptom_signals:
                 conditions = signal.get("conditions", {})
                 matched = True
-
+                
                 for key, value in conditions.items():
                     entity_value = entities.get(key)
                     if not self._check_condition(entity_value, value):
                         matched = False
                         break
-
+                
                 if matched:
                     return signal.get("alert_message")
-
+                    
         return None
 
     def _check_condition(self, entity_value: Any, condition: Any) -> bool:
         """检查条件是否满足"""
+        # 处理 None 值
         if entity_value is None:
+            # 如果条件是检查不存在，则可能通过，但在分诊逻辑中通常意味着条件不满足
             return False
 
         if isinstance(condition, dict):
             # 范围条件
             if "lt" in condition:
-                return float(entity_value) < condition["lt"]
+                value = self._to_number(entity_value)
+                return value is not None and value < condition["lt"]
+            if "lte" in condition:
+                value = self._to_number(entity_value)
+                return value is not None and value <= condition["lte"]
             if "gt" in condition:
-                return float(entity_value) > condition["gt"]
+                value = self._to_number(entity_value)
+                return value is not None and value > condition["gt"]
+            if "gte" in condition:
+                value = self._to_number(entity_value)
+                return value is not None and value >= condition["gte"]
             if "contains" in condition:
-                return condition["contains"] in str(entity_value).lower()
+                return str(condition["contains"]) in str(entity_value)
         else:
             # 精确匹配
             return str(entity_value).lower() == str(condition).lower()
 
         return False
 
-    def get_missing_slots(self, symptom: str, entities: Dict[str, Any]) -> List[str]:
+    def _to_number(self, value: Any) -> Optional[float]:
+        """将字符串数值（如'2个月'）转换为float"""
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            import re
+            match = re.search(r"\d+(?:\.\d+)?", value)
+            if match:
+                return float(match.group(0))
+            cn_map = {
+                "零": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
+                "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10
+            }
+            if "十" in value:
+                parts = value.split("十")
+                left = cn_map.get(parts[0], 1) if parts[0] else 1
+                right = cn_map.get(parts[1], 0) if len(parts) > 1 else 0
+                return float(left * 10 + right)
+            for ch, num in cn_map.items():
+                if ch in value:
+                    return float(num)
+        return None
+
+    # ... (get_missing_slots, _should_relax_follow_up, generate_follow_up_question stay same) ...
+
+    def make_triage_decision(
+        self,
+        symptom: str,
+        entities: Dict[str, Any]
+    ) -> TriageDecision:
         """
-        获取缺失的槽位
+        做出分诊决策
+        
+        Args:
+            symptom: 症状
+            entities: 实体
+            
+        Returns:
+            TriageDecision: 分诊决策
+        """
+        # 1. 首先检查危险信号 (Hard Safety Check)
+        danger_alert = self.check_danger_signals(entities)
+        if danger_alert:
+            return TriageDecision(
+                level="emergency",
+                reason="检测到危险信号",
+                action=danger_alert,
+                danger_signal=danger_alert
+            )
+
+        # 2. 预处理实体 (计算派生字段)
+        processed_entities = entities.copy()
+        if "duration" in entities:
+            processed_entities["duration_hours"] = self._duration_hours(entities["duration"])
+
+        # 3. 基于规则引擎做决策
+        if symptom in self.rules:
+            decision = self._evaluate_rules(self.rules[symptom], processed_entities)
+            if decision:
+                return decision
+
+        # 4. 回退到硬编码逻辑 (为了兼容未迁移的规则)
+        if symptom == "发烧":
+            return self._triage_fever(entities) # 此时应该已经被规则覆盖，作为Double Check
+        elif symptom == "摔倒":
+            return self._triage_fall(entities)
+        elif symptom == "呕吐":
+            return self._triage_vomit(entities)
+        elif symptom == "腹泻":
+            return self._triage_diarrhea(entities)
+        else:
+            # 默认建议
+            return TriageDecision(
+                level="observe",
+                reason="症状不明确",
+                action="建议先在家观察，如症状加重请及时就医"
+            )
+
+    def _evaluate_rules(self, rules: List[Dict[str, Any]], entities: Dict[str, Any]) -> Optional[TriageDecision]:
+        """评估规则列表"""
+        for rule in rules:
+            conditions = rule.get("conditions", {})
+            matched = True
+            
+            for key, condition in conditions.items():
+                entity_value = entities.get(key)
+                if not self._check_condition(entity_value, condition):
+                    matched = False
+                    break
+            
+            if matched:
+                decision_data = rule["decision"]
+                return TriageDecision(
+                    level=decision_data["level"],
+                    reason=decision_data["reason"],
+                    action=decision_data["action"]
+                )
+        return None
+
+    def get_missing_slots(
+        self,
+        symptom: str,
+        entities: Dict[str, Any],
+        profile_context: Optional[Dict[str, Any]] = None
+    ) -> List[str]:
+        """
+        获取缺失的槽位（支持从档案自动填充）
 
         Args:
             symptom: 症状
             entities: 已提取的实体
+            profile_context: 用户档案上下文（可选）
 
         Returns:
             List[str]: 缺失的槽位列表
@@ -109,15 +249,51 @@ class TriageEngine:
             return []
 
         required_slots = self.slot_definitions[symptom].get("required", [])
-        missing = []
 
+        # 尝试从档案自动填充缺失槽位
+        if profile_context and profile_context.get("baby_info"):
+            baby_info = profile_context["baby_info"]
+
+            # 自动填充月龄
+            if "age_months" in required_slots and "age_months" not in entities:
+                if baby_info.get("age_months"):
+                    entities["age_months"] = baby_info["age_months"]
+                    logger.info(f"从档案自动填充月龄: {baby_info['age_months']}个月")
+
+            # 自动填充体重（用于药物剂量计算）
+            if "weight_kg" in required_slots and "weight_kg" not in entities:
+                if baby_info.get("weight_kg"):
+                    entities["weight_kg"] = baby_info["weight_kg"]
+                    logger.info(f"从档案自动填充体重: {baby_info['weight_kg']}kg")
+
+        if self._should_relax_follow_up(symptom, entities):
+            return []
+
+        missing = []
         for slot in required_slots:
             if slot not in entities or entities[slot] is None:
                 missing.append(slot)
 
         return missing
 
-    def generate_follow_up_question(self, missing_slots: List[str]) -> str:
+    def _should_relax_follow_up(self, symptom: str, entities: Dict[str, Any]) -> bool:
+        """轻症或信息充足时减少追问"""
+        if symptom != "发烧":
+            return False
+
+        age_months = self._to_number(entities.get("age_months"))
+        temperature = self._to_number(entities.get("temperature"))
+        mental_state = entities.get("mental_state", "")
+
+        if age_months is None or temperature is None:
+            return False
+
+        if age_months >= 3 and temperature < 38.5 and ("正常" in mental_state or "玩耍" in mental_state or "还可以" in mental_state):
+            return True
+
+        return False
+
+    def generate_follow_up_question(self, symptom: str, missing_slots: List[str]) -> str:
         """
         生成追问问题
 
@@ -132,12 +308,20 @@ class TriageEngine:
 
         # 获取第一个缺失槽位的问题模板
         slot = missing_slots[0]
+
+        # 优先使用配置文件中的问题模板
+        symptom_questions = self.slot_definitions.get(symptom, {}).get("questions", {})
+        if slot in symptom_questions:
+            return symptom_questions[slot]
+
+        # 回退到通用模板
         questions = {
             "age_months": "请问宝宝现在多大了？（月龄）",
             "temperature": "请问宝宝现在的体温是多少度？",
             "duration": "这个症状持续多久了？",
             "mental_state": "宝宝的精神状态怎么样？是玩耍正常还是比较蔫？",
             "accompanying_symptoms": "除了这个症状，还有其他不舒服的地方吗？比如咳嗽、呕吐等？",
+            "frequency": "这个症状发生的频率怎么样？",
         }
 
         return questions.get(slot, f"请补充：{slot}")
@@ -186,13 +370,13 @@ class TriageEngine:
 
     def _triage_fever(self, entities: Dict[str, Any]) -> TriageDecision:
         """发烧分诊"""
-        age_months = entities.get("age_months")
+        age_months = self._to_number(entities.get("age_months"))
         temperature = entities.get("temperature")
         duration = entities.get("duration")
         mental_state = entities.get("mental_state", "")
 
         # 3个月以下发烧 -> 立即就医
-        if age_months and age_months < 3:
+        if age_months is not None and age_months < 3:
             return TriageDecision(
                 level="emergency",
                 reason="3个月以下婴儿发烧属于高危情况",
@@ -208,7 +392,7 @@ class TriageEngine:
             )
 
         # 持续高热超过48小时 -> 就医
-        if duration and ("2天" in duration or "48小时" in duration or "3天" in duration):
+        if duration and self._duration_hours(duration) >= 48:
             return TriageDecision(
                 level="emergency",
                 reason="持续高热超过48小时",
@@ -225,6 +409,17 @@ class TriageEngine:
                    "3. 出现抽搐、惊厥\n"
                    "4. 持续高热超过48小时"
         )
+
+    def _duration_hours(self, duration: str) -> float:
+        """将持续时长文本转换为小时数"""
+        value = self._to_number(duration)
+        if value is None:
+            return 0.0
+        if "天" in duration:
+            return value * 24
+        if "小时" in duration:
+            return value
+        return 0.0
 
     def _triage_fall(self, entities: Dict[str, Any]) -> TriageDecision:
         """摔倒分诊"""

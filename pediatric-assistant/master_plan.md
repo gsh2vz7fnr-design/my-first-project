@@ -1,13 +1,61 @@
-  ---                                                                                                                                                         
-  # 智能儿科分诊与护理助手 - 步进式开发计划书 (Master Plan)                                                                                                   
-                                                                                                                                                              
-  > **版本**: v3.0                                                                                                                                            
-  > **日期**: 2026-02-07                                                                                                                                      
-  > **目标**: 基于现有代码架构，完善PRD中定义的核心功能模块，新增【健康档案】模块完整实现
+---
+# 智能儿科分诊与护理助手 - 步进式开发计划书 (Master Plan)
 
-  ---
+> **版本**: v3.1
+> **日期**: 2026-02-08
+> **目标**: 基于现有代码架构，完善PRD中定义的核心功能模块，新增【健康档案】模块完整实现
 
-  ## Phase 1: 核心变更分析 (Gap Analysis)
+---
+
+## 进度总览 (Progress Dashboard)
+
+| Phase | 名称 | 状态 | 完成度 | 备注 |
+|-------|------|------|--------|------|
+| Phase 1 | 核心变更分析 (Gap Analysis) | **Reviewing** | 90% | 53 tests passed, 68% coverage |
+| Phase 1.5 | 修复与打磨 (Fix & Polish) | **Pending** | 0% | 7 个 Bug 待修复 |
+| Phase 2 | 数据模型定义 (Data Schema) | Completed | 100% | Pydantic 模型已定义 |
+| Phase 3 | 组件拆解 (Component Breakdown) | Completed | 100% | 前端组件已实现 |
+| Phase 4 | 步进式执行 (Implementation) | Completed | 100% | 后端 + 前端已联调 |
+| Phase 5 | 端到端测试 (E2E Testing) | Pending | 0% | 待 Phase 1.5 完成后启动 |
+
+---
+
+## Phase 1.5: 修复与打磨 (Fix & Polish) — NEW
+
+> **状态**: Pending
+> **依赖**: Phase 1 测试报告
+> **详细计划**: 见 [BUGFIX_PLAN.md](./BUGFIX_PLAN.md)
+
+### 发现的问题
+
+| 编号 | 严重程度 | 问题描述 | 修复文件 |
+|------|---------|---------|---------|
+| BUG-001 | Critical | 姓名字段允许空字符串 | `models/user.py` |
+| BUG-002 | Critical | 身份证号不可变规则未实现 | `services/profile_service.py` |
+| BUG-003 | Critical | 出生日期允许未来日期 | `models/user.py` |
+| BUG-004 | Major | `profile.py` 缺少 datetime 导入 | `routers/profile.py` |
+| BUG-005 | Major | 成员更新/删除无测试覆盖 | `tests/` |
+| BUG-006 | Major | HealthRecordsService 未测试 | `tests/` |
+| BUG-007 | Minor | 裸 except 语句 | `services/rag_service.py` |
+
+### 执行步骤
+
+```
+Step 1 (Critical Fixes)  ──→  Step 2 (Coverage 68%→85%)  ──→  Step 3 (Quality)  ──→  Step 4 (Regression)
+```
+
+### 完成标准
+
+- [ ] 全量单元测试通过
+- [ ] 覆盖率 >= 85%
+- [ ] 空姓名 / 未来日期被拒绝
+- [ ] 身份证号不可变
+- [ ] profile.py 无导入错误
+- [ ] 前端健康档案页加载正常
+
+---
+
+## Phase 1: 核心变更分析 (Gap Analysis) — **Status: Reviewing**
 
   ### 1.1 现有代码结构概览
 

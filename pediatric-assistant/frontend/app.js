@@ -1,5 +1,6 @@
 // Note: components.js is loaded as a regular script, so all functions are global
 const API_BASE = "http://localhost:8000";
+const CURRENT_USER_ID = "test_user_001";
 
 let conversationId = null;
 let currentTab = "chat"; // Track current tab
@@ -9,21 +10,13 @@ function handleTabChange(tabName) {
   currentTab = tabName;
 
   if (tabName === "chat") {
-    // Show chat, hide profile and health
-    pendingPanel.el.style.display = "none";
+    // Show chat, hide health
     healthDashboard.element.style.display = "none";
     chat.style.display = "flex";
     composer.el.style.display = "flex";
-  } else if (tabName === "profile") {
-    // Show profile panel, hide chat and health
-    pendingPanel.el.style.display = "block";
-    healthDashboard.element.style.display = "none";
-    chat.style.display = "none";
-    composer.el.style.display = "none";
   } else if (tabName === "health") {
-    // Show health dashboard, hide chat and profile
+    // Show health dashboard, hide chat
     healthDashboard.element.style.display = "block";
-    pendingPanel.el.style.display = "none";
     chat.style.display = "none";
     composer.el.style.display = "none";
 
@@ -71,9 +64,15 @@ if (!disclaimerAccepted) {
 
 const header = createHeader();
 const tabs = createTabs(handleTabChange);
-const pendingPanel = createPendingPanel();
 const chat = createChat();
 const composer = createComposer();
+
+// Add progress container to composer
+const progressContainer = document.createElement("div");
+progressContainer.className = "composer-progress-container";
+composer.el.insertBefore(progressContainer, composer.el.firstChild);
+composer.refs.progress = progressContainer;
+
 const sourceSheet = createSourceSheet();
 const healthDashboard = createHealthDashboard();
 
@@ -112,23 +111,18 @@ sidebarToggle.addEventListener("click", () => {
 });
 
 app.appendChild(header);
-app.appendChild(pendingPanel.el);
 app.appendChild(chat);
 app.appendChild(healthDashboard.element);
 app.appendChild(composer.el);
 root.appendChild(app);
 
-// Initialize: hide profile and health panels by default
-pendingPanel.el.style.display = "none";
+// Initialize: hide health panel by default
 healthDashboard.element.style.display = "none";
 
 // Listen for tab change events from header
 header.addEventListener("tabchange", (e) => {
   handleTabChange(e.detail);
 });
-
-// Initialize: hide profile panel by default
-pendingPanel.el.style.display = "none";
 
 // Add sidebar toggle button to header
 const sidebarToggleWrapper = header.querySelector(".sidebar-toggle-wrapper");
@@ -168,6 +162,7 @@ function appendMessage(role, text, options = {}) {
   if (options.emergency) {
     bubble.querySelector(".bubble").classList.add("emergency");
   }
+  // Check if bubble has content before removing empty state
   const empty = chat.querySelector(".chat-empty");
   if (empty) {
     empty.remove();
@@ -175,6 +170,36 @@ function appendMessage(role, text, options = {}) {
   chat.appendChild(bubble);
   chat.scrollTop = chat.scrollHeight;
   return bubble;
+}
+
+// Quick Reply configuration
+const QUICK_REPLIES_MAP = {
+  '精神状态': ['嗜睡', '正常玩耍', '哭闹不止', '有点蔫'],
+  '体温': ['37.5℃', '38.0℃', '38.5℃', '39.0℃', '39.5℃', '40.0℃'],
+  '发烧持续时间': ['刚刚发现', '半天了', '一天了', '两天了', '三天以上'],
+  '伴随症状': ['无', '咳嗽', '流鼻涕', '呕吐', '腹泻', '皮疹'],
+  '大便性状': ['正常', '稀水样', '粘液便', '蛋花汤样', '柏油样'],
+  '尿量': ['正常', '偏少', '明显减少', '无尿'],
+  '呼吸': ['平稳', '急促', '困难', '有异响'],
+  '进食情况': ['正常', '食欲减退', '拒食', '呕吐'],
+  '活动力': ['正常', '减弱', '不愿动']
+};
+
+// Global reference for slot tracker components
+let activeSlotTracker = null;
+let activeQuickReplies = null;
+
+// Listen for form cancellation
+window.addEventListener("form-cancelled", () => {
+  clearComposerProgress();
+});
+
+function clearComposerProgress() {
+  if (composer.refs.progress) {
+    composer.refs.progress.innerHTML = "";
+  }
+  activeSlotTracker = null;
+  activeQuickReplies = null;
 }
 
 async function loadHistory() {
@@ -194,9 +219,9 @@ async function loadHistory() {
 }
 
 async function loadConversations() {
-  const userId = pendingPanel.refs.userIdInput.value.trim() || "test_user_001";
+  const userId = CURRENT_USER_ID;
   try {
-    const response = await fetch(`${API_BASE}/api/v1/conversations/${userId}`);
+    const response = await fetch(`${API_BASE}/api/v1/chat/conversations/${userId}`);
     if (!response.ok) throw new Error("请求失败");
     const data = await response.json();
     conversationSidebar.renderConversations(data.data.conversations || []);
@@ -212,9 +237,9 @@ async function loadConversations() {
 }
 
 async function handleNewConversation() {
-  const userId = pendingPanel.refs.userIdInput.value.trim() || "test_user_001";
+  const userId = CURRENT_USER_ID;
   try {
-    const response = await fetch(`${API_BASE}/api/v1/conversations/${userId}`, {
+    const response = await fetch(`${API_BASE}/api/v1/chat/conversations/${userId}`, {
       method: "POST",
     });
     if (!response.ok) throw new Error("请求失败");
@@ -258,9 +283,9 @@ async function handleDeleteConversation(convId) {
     return;
   }
 
-  const userId = pendingPanel.refs.userIdInput.value.trim() || "test_user_001";
+  const userId = CURRENT_USER_ID;
   try {
-    const response = await fetch(`${API_BASE}/api/v1/conversations/${userId}/${convId}`, {
+    const response = await fetch(`${API_BASE}/api/v1/chat/conversations/${userId}/${convId}`, {
       method: "DELETE",
     });
     if (!response.ok) throw new Error("请求失败");
@@ -328,72 +353,6 @@ async function fetchSource(entryId) {
   }
 }
 
-function renderPending(items) {
-  const pendingList = pendingPanel.refs.pendingList;
-  pendingList.innerHTML = "";
-  if (!items || items.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "panel-empty";
-    empty.textContent = "暂无待确认内容";
-    pendingList.appendChild(empty);
-    return;
-  }
-
-  items.forEach((item) => {
-    const card = document.createElement("div");
-    card.className = "pending-item";
-
-    const meta = document.createElement("div");
-    meta.className = "pending-meta";
-
-    const type = document.createElement("div");
-    type.className = "pending-type";
-    type.textContent = item.type || "unknown";
-
-    const record = document.createElement("div");
-    record.className = "pending-record";
-    record.textContent = JSON.stringify(item.record || {}, null, 0);
-
-    meta.appendChild(type);
-    meta.appendChild(record);
-
-    const actions = document.createElement("div");
-    actions.className = "pending-actions";
-
-    const confirmBtn = document.createElement("button");
-    confirmBtn.className = "pending-confirm";
-    confirmBtn.textContent = "确认";
-    confirmBtn.addEventListener("click", () => updatePending(item, true));
-
-    const rejectBtn = document.createElement("button");
-    rejectBtn.className = "pending-reject";
-    rejectBtn.textContent = "拒绝";
-    rejectBtn.addEventListener("click", () => updatePending(item, false));
-
-    actions.appendChild(confirmBtn);
-    actions.appendChild(rejectBtn);
-
-    card.appendChild(meta);
-    card.appendChild(actions);
-    pendingList.appendChild(card);
-  });
-}
-
-async function fetchPending() {
-  const userId = pendingPanel.refs.userIdInput.value.trim();
-  if (!userId) return;
-
-  pendingPanel.refs.pendingList.innerHTML = "<div class='panel-empty'>加载中...</div>";
-  try {
-    const response = await fetch(`${API_BASE}/api/v1/profile/${userId}/pending`);
-    if (!response.ok) throw new Error("请求失败");
-    const data = await response.json();
-    renderPending(data.data.pending_confirmations || []);
-  } catch (err) {
-    pendingPanel.refs.pendingList.innerHTML = "<div class='panel-empty'>无法获取待确认内容</div>";
-  }
-}
-
 /**
  * Send message with streaming output
  * @param {string} text - User message
@@ -411,7 +370,7 @@ async function sendMessageStream(text, retryCount = 0) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        user_id: pendingPanel.refs.userIdInput.value.trim() || "test_user_001",
+        user_id: CURRENT_USER_ID,
         conversation_id: conversationId,
         message: text,
       }),
@@ -480,7 +439,45 @@ async function sendMessageStream(text, retryCount = 0) {
               if (metadata.need_follow_up && metadata.missing_slots) {
                 showBanner("提示：需要补充关键信息后才能给出更准确建议。", "info");
 
-                // Create follow-up form
+                // Clear previous progress
+                clearComposerProgress();
+
+                // 1. Prepare data for Slot Tracker
+                // We assume the first missing slot is "Current", others are "Waiting"
+                const slotKeys = Object.keys(metadata.missing_slots);
+                const slotsData = slotKeys.map((key, index) => {
+                  const slotDef = metadata.missing_slots[key];
+                  return {
+                    label: slotDef.label || key,
+                    status: index === 0 ? "current" : "waiting",
+                    value: null // Value is missing
+                  };
+                });
+
+                // 2. Create Slot Tracker
+                activeSlotTracker = createSlotTracker(slotsData);
+                composer.refs.progress.appendChild(activeSlotTracker.element);
+
+                // 3. Create Quick Replies for the CURRENT slot (first one)
+                const currentSlotKey = slotKeys[0];
+                const currentSlotLabel = metadata.missing_slots[currentSlotKey].label || currentSlotKey;
+                
+                // Try to find chips in map by key or label
+                const chips = QUICK_REPLIES_MAP[currentSlotKey] || QUICK_REPLIES_MAP[currentSlotLabel];
+                
+                if (chips && chips.length > 0) {
+                  activeQuickReplies = createQuickReplies(chips, (value) => {
+                    // Send message when chip is clicked
+                    composer.refs.input.value = value;
+                    sendMessage();
+                  });
+                  composer.refs.progress.appendChild(activeQuickReplies.element);
+                }
+
+                // 4. Update Input Placeholder
+                composer.refs.input.placeholder = `请描述${currentSlotLabel}...`;
+
+                // 5. Create inline form fields (as requested: below dialogue)
                 const form = createFollowUpForm(metadata.missing_slots, (values) => {
                   // Send form data as a follow-up message
                   const followUpMessage = Object.entries(values)
@@ -494,6 +491,9 @@ async function sendMessageStream(text, retryCount = 0) {
 
                   appendMessage("user", followUpMessage);
                   form.element.remove();
+                  
+                  // Clear progress bar
+                  clearComposerProgress();
 
                   // Send the follow-up data to backend
                   sendMessageStream(followUpMessage);
@@ -600,27 +600,6 @@ async function sendMessageStream(text, retryCount = 0) {
   }
 }
 
-async function updatePending(item, confirm) {
-  const userId = pendingPanel.refs.userIdInput.value.trim();
-  if (!userId) return;
-
-  const payload = confirm
-    ? { confirm: [item], reject: [] }
-    : { confirm: [], reject: [item] };
-
-  try {
-    const response = await fetch(`${API_BASE}/api/v1/profile/${userId}/confirm`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (!response.ok) throw new Error("请求失败");
-    await fetchPending();
-  } catch (err) {
-    pendingPanel.refs.pendingList.innerHTML = "<div class='panel-empty'>更新失败，请重试</div>";
-  }
-}
-
 chat.addEventListener("click", (event) => {
   const target = event.target;
   if (target.classList.contains("citation")) {
@@ -635,9 +614,6 @@ chat.addEventListener("click", (event) => {
 document.querySelectorAll("[data-sheet-close]").forEach((el) => {
   el.addEventListener("click", closeSheet);
 });
-
-pendingPanel.refs.refreshButton.addEventListener("click", fetchPending);
-fetchPending();
 
 // Load conversations on startup
 loadConversations();
@@ -736,7 +712,7 @@ function showEmptyMemberState() {
 }
 
 async function loadHealthData() {
-  const userId = pendingPanel.refs.userIdInput.value.trim() || "test_user_001";
+  const userId = CURRENT_USER_ID;
 
   // 移除错误提示
   const errorBanner = healthDashboard.element.querySelector(".health-error-banner");
@@ -1048,7 +1024,7 @@ function showCreateMemberForm() {
       }
 
       const data = form.getData();
-      const userId = pendingPanel.refs.userIdInput.value.trim() || "test_user_001";
+      const userId = CURRENT_USER_ID;
 
       try {
         // 创建成员

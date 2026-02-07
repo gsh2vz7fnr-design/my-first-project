@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>宝宝健康档案 - 智能儿科助手</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#4F46E5', // Indigo 600
+                        secondary: '#10B981', // Emerald 500
+                        danger: '#EF4444', // Red 500
+                        warning: '#F59E0B', // Amber 500
+                        background: '#F3F4F6', // Gray 100
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&display=swap');
+        body {
+            font-family: 'Noto Sans SC', sans-serif;
+        }
+        .card-shadow {
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-800 min-h-screen pb-20">
+
+    <!-- 顶部导航 -->
+    <header class="bg-white shadow-sm sticky top-0 z-50">
+        <div class="max-w-md mx-auto px-4 py-4 flex justify-between items-center">
+            <h1 class="text-lg font-bold text-gray-900">健康档案</h1>
+            <button class="text-primary text-sm font-medium">编辑</button>
+        </div>
+    </header>
+
+    <main class="max-w-md mx-auto px-4 pt-4 space-y-6">
+
+        <!-- 1. 洞察卡片 (Insight Card) - 核心功能 -->
+        <!-- 仅在有待确认信息时显示 -->
+        <div class="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-100 rounded-xl p-4 card-shadow relative overflow-hidden">
+            <div class="absolute top-0 right-0 -mt-2 -mr-2 w-16 h-16 bg-blue-500 rounded-full opacity-10"></div>
+            
+            <div class="flex items-start gap-3">
+                <div class="bg-white p-2 rounded-full shadow-sm text-blue-600">
+                    <i class="fas fa-lightbulb text-xl"></i>
+                </div>
+                <div class="flex-1">
+                    <h3 class="font-bold text-blue-900 text-sm mb-1">档案更新建议</h3>
+                    <p class="text-xs text-blue-700 leading-relaxed mb-3">
+                        在昨天的咨询中，我注意到宝宝可能对 <span class="font-bold underline">鸡蛋 (Egg Yolk)</span> 过敏。是否将其加入健康档案，以便我在未来提醒您？
+                    </p>
+                    
+                    <div class="flex gap-2">
+                        <button onclick="confirmUpdate(this)" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white text-xs py-2 px-3 rounded-lg font-medium transition flex items-center justify-center gap-1">
+                            <i class="fas fa-check"></i> 确认加入
+                        </button>
+                        <button onclick="dismissUpdate(this)" class="flex-1 bg-white border border-blue-200 text-blue-600 hover:bg-blue-50 text-xs py-2 px-3 rounded-lg font-medium transition">
+                            忽略
+                        </button>
+                        <button class="px-2 text-blue-400 hover:text-blue-600">
+                            <i class="fas fa-pen"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 2. 宝宝基础信息卡片 -->
+        <div class="bg-white rounded-2xl p-5 card-shadow">
+            <div class="flex items-center gap-4 mb-4">
+                <div class="w-16 h-16 rounded-full bg-gray-200 overflow-hidden border-2 border-white shadow">
+                    <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=Baby&backgroundColor=b6e3f4" alt="Baby Avatar">
+                </div>
+                <div>
+                    <h2 class="text-xl font-bold text-gray-900">宝宝 (6个月)</h2>
+                    <p class="text-sm text-gray-500">2025年08月07日出生 · 男宝</p>
+                </div>
+            </div>
+            
+            <div class="grid grid-cols-3 gap-3">
+                <div class="bg-gray-50 rounded-xl p-3 text-center">
+                    <p class="text-xs text-gray-400 mb-1">体重</p>
+                    <p class="text-lg font-bold text-gray-800">8.5 <span class="text-xs font-normal">kg</span></p>
+                </div>
+                <div class="bg-gray-50 rounded-xl p-3 text-center">
+                    <p class="text-xs text-gray-400 mb-1">身高</p>
+                    <p class="text-lg font-bold text-gray-800">68 <span class="text-xs font-normal">cm</span></p>
+                </div>
+                <div class="bg-gray-50 rounded-xl p-3 text-center">
+                    <p class="text-xs text-gray-400 mb-1">生长曲线</p>
+                    <p class="text-sm font-bold text-green-600">正常</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- 3. 关键健康标签 (Allergies & Conditions) -->
+        <div class="space-y-3">
+            <h3 class="text-sm font-bold text-gray-900 px-1 flex items-center justify-between">
+                关键警示
+                <span class="text-xs font-normal text-gray-400">用于分诊风控</span>
+            </h3>
+            
+            <!-- 过敏史 -->
+            <div class="bg-white rounded-xl p-4 card-shadow border-l-4 border-red-400">
+                <div class="flex justify-between items-start mb-2">
+                    <div class="flex items-center gap-2">
+                        <i class="fas fa-shield-virus text-red-400"></i>
+                        <span class="font-bold text-gray-800">过敏史 (Allergies)</span>
+                    </div>
+                    <button class="text-xs text-gray-400"><i class="fas fa-plus"></i></button>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                    <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-red-50 text-red-700 border border-red-100">
+                        头孢类药物
+                        <i class="fas fa-exclamation-circle ml-1"></i>
+                    </span>
+                    <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-orange-50 text-orange-700 border border-orange-100">
+                        芒果 (疑似)
+                    </span>
+                </div>
+            </div>
+
+            <!-- 既往病史 -->
+            <div class="bg-white rounded-xl p-4 card-shadow border-l-4 border-yellow-400">
+                <div class="flex justify-between items-start mb-2">
+                    <div class="flex items-center gap-2">
+                        <i class="fas fa-history text-yellow-500"></i>
+                        <span class="font-bold text-gray-800">既往病史</span>
+                    </div>
+                </div>
+                <ul class="space-y-2">
+                    <li class="flex justify-between items-center text-sm">
+                        <span class="text-gray-700">热性惊厥 (单纯型)</span>
+                        <span class="text-xs text-gray-400">2025.12.01</span>
+                    </li>
+                    <li class="flex justify-between items-center text-sm">
+                        <span class="text-gray-700">支气管炎</span>
+                        <span class="text-xs text-gray-400">2025.10.15</span>
+                    </li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- 4. 用药记录 -->
+        <div>
+            <h3 class="text-sm font-bold text-gray-900 px-1 mb-3 flex items-center justify-between">
+                近期用药
+                <button class="text-xs text-primary">查看全部</button>
+            </h3>
+            <div class="bg-white rounded-xl card-shadow divide-y divide-gray-100">
+                <div class="p-4 flex gap-3">
+                    <div class="bg-indigo-100 text-indigo-600 w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0">
+                        <i class="fas fa-pills"></i>
+                    </div>
+                    <div class="flex-1">
+                        <div class="flex justify-between mb-1">
+                            <span class="font-bold text-gray-800 text-sm">泰诺林 (对乙酰氨基酚)</span>
+                            <span class="text-xs text-gray-400">今天 03:00</span>
+                        </div>
+                        <p class="text-xs text-gray-500">剂量: 1.25ml (基于体重8.5kg)</p>
+                        <p class="text-xs text-gray-400 mt-1">备注: 发烧39度时服用，效果良好</p>
+                    </div>
+                </div>
+                <div class="p-4 flex gap-3 opacity-60">
+                    <div class="bg-gray-100 text-gray-400 w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0">
+                        <i class="fas fa-prescription-bottle"></i>
+                    </div>
+                    <div class="flex-1">
+                        <div class="flex justify-between mb-1">
+                            <span class="font-bold text-gray-800 text-sm">美林 (布洛芬)</span>
+                            <span class="text-xs text-gray-400">昨天 20:30</span>
+                        </div>
+                        <p class="text-xs text-gray-500">剂量: 1.0ml</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </main>
+
+    <!-- 底部 TabBar -->
+    <nav class="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 pb-safe pt-2 px-6 flex justify-between items-center z-50">
+        <button class="flex flex-col items-center gap-1 p-2 text-gray-400 hover:text-primary transition">
+            <i class="fas fa-comment-medical text-xl"></i>
+            <span class="text-[10px] font-medium">智能分诊</span>
+        </button>
+        <button class="flex flex-col items-center gap-1 p-2 text-primary">
+            <i class="fas fa-file-medical text-xl"></i>
+            <span class="text-[10px] font-medium">健康档案</span>
+        </button>
+        <button class="flex flex-col items-center gap-1 p-2 text-gray-400 hover:text-primary transition">
+            <i class="fas fa-user text-xl"></i>
+            <span class="text-[10px] font-medium">我的</span>
+        </button>
+    </nav>
+
+    <script>
+        // 简单的交互逻辑演示
+        function confirmUpdate(btn) {
+            const card = btn.closest('.relative');
+            // 模拟动画
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 处理中';
+            setTimeout(() => {
+                card.classList.add('transition-all', 'duration-500', 'opacity-0', '-translate-y-4');
+                setTimeout(() => {
+                    card.remove();
+                    // 这里可以添加 Toast 提示 "已成功加入档案"
+                }, 500);
+            }, 800);
+        }
+
+        function dismissUpdate(btn) {
+            const card = btn.closest('.relative');
+            card.classList.add('transition-all', 'duration-500', 'opacity-0', 'scale-95');
+            setTimeout(() => {
+                card.remove();
+            }, 500);
+        }
+    </script>
+</body>
+</html>
