@@ -20,6 +20,11 @@ class Settings(BaseSettings):
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com/v1"
     DEEPSEEK_MODEL: str = "deepseek-chat"  # deepseek-chat, deepseek-coder
 
+    # 硅基流动API配置（用于Embedding）
+    SILICONFLOW_API_KEY: Optional[str] = os.getenv("SILICONFLOW_API_KEY", "")
+    SILICONFLOW_BASE_URL: str = "https://api.siliconflow.cn/v1"
+    SILICONFLOW_EMBEDDING_MODEL: str = "BAAI/bge-m3"
+
     # 数据库配置
     BASE_DIR: Path = Path(__file__).resolve().parent
     DATA_DIR: Path = BASE_DIR / "data"

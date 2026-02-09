@@ -69,7 +69,17 @@
       "Bash(index.html << 'HTML'\n<!doctype html>\n<html lang=\"zh-CN\">\n  <head>\n    <meta charset=\"utf-8\" />\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />\n    <title>智能儿科分诊与护理助手 - H5</title>\n    <link rel=\"preconnect\" href=\"https://fonts.googleapis.com\" />\n    <link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin />\n    <link\n      href=\"https://fonts.googleapis.com/css2?family=Fraunces:wght@400;600;700&family=Work+Sans:wght@400;500;600&display=swap\"\n      rel=\"stylesheet\"\n    />\n    <link rel=\"stylesheet\" href=\"./styles/themes.css\" />\n    <link rel=\"stylesheet\" href=\"./styles.css?v=3.5\" />\n  </head>\n  <body>\n    <div id=\"root\"></div>\n\n    <script src=\"./components.js?v=3.5\"></script>\n    <script src=\"./app.js?v=3.5\"></script>\n  </body>\n</html>\nHTML)",
       "Bash(PYTHONPATH=. python3:*)",
       "Bash(PYTHONPATH=. ./venv/bin/python -m pytest:*)",
-      "Bash(PYTHONPATH=. ./venv/bin/python:*)"
+      "Bash(PYTHONPATH=. ./venv/bin/python:*)",
+      "Bash(./venv/bin/python:*)",
+      "Bash(sqlite3:*)",
+      "Bash(./venv/bin/pytest:*)",
+      "Bash(DEEPSEEK_API_KEY=\"test\" ./venv/bin/pytest:*)",
+      "Bash(/Users/zhang/Desktop/Claude/pediatric-assistant/backend/venv/bin/python -m pytest:*)",
+      "Bash(pytest:*)",
+      "Bash(./venv/bin/pip:*)",
+      "Bash(PYTHONPATH=/Users/zhang/Desktop/Claude/pediatric-assistant/backend python3 -m uvicorn:*)",
+      "Bash(kill:*)",
+      "Bash(cat:*)"
     ]
   }
 }
