@@ -37,8 +37,11 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL: str = "local"  # local 或 OpenAI 兼容的embedding模型
 
     # 安全配置
-    SECRET_KEY: str = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
-    ALLOWED_ORIGINS: list = ["*"]  # 生产环境需要限制
+    SECRET_KEY: str = os.getenv("SECRET_KEY", "")
+    ALLOWED_ORIGINS: list = os.getenv(
+        "ALLOWED_ORIGINS",
+        "http://localhost:3000,http://localhost:8000,http://127.0.0.1:3000,http://localhost:8080,http://127.0.0.1:8080"
+    ).split(",")
 
     # 业务配置
     MAX_CONVERSATION_HISTORY: int = 20  # 最大对话历史条数
@@ -56,7 +59,7 @@ class Settings(BaseSettings):
     # 知识库配置
     KNOWLEDGE_BASE_PATH: str = str(DATA_DIR / "knowledge_base")
     TOP_K_RETRIEVAL: int = 3  # RAG检索返回的文档数
-    SIMILARITY_THRESHOLD: float = 0.7  # 相似度阈值
+    SIMILARITY_THRESHOLD: float = 0.3  # 相似度阈值
 
     # 分诊规则配置
     TRIAGE_RULES_PATH: str = str(DATA_DIR / "triage_rules")

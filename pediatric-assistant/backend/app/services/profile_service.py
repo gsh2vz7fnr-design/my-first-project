@@ -4,6 +4,8 @@
 import json
 import sqlite3
 import asyncio
+import threading
+from contextlib import contextmanager
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 import uuid
@@ -22,13 +24,19 @@ class ProfileService:
 
     def __init__(self, db_path: str):
         self.db_path = db_path
+        self._db_lock = threading.Lock()
         # 存储待处理的档案提取任务
         self._pending_extractions: Dict[str, asyncio.Task] = {}
 
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        return conn
+    @contextmanager
+    def _connect(self):
+        with self._db_lock:
+            conn = sqlite3.connect(self.db_path, check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            try:
+                yield conn
+            finally:
+                conn.close()
 
     def init_db(self) -> None:
         """初始化数据库"""
@@ -255,20 +263,27 @@ class ProfileService:
 
     def _cancel_pending_task(self, user_id: str, conversation_id: str):
         """取消待执行的任务（如果存在）"""
-        # 查找该用户该对话的pending任务
-        # 这里需要解析payload，SQLite不支持直接JSON查询，用模糊匹配替代
-        search_pattern = f'%"{conversation_id}"%'
-        
+        # Bug #4 修复: 转义 SQL LIKE 通配符，防止注入和误匹配
+        def escape_like_pattern(value: str) -> str:
+            """转义 SQL LIKE 模式中的特殊字符"""
+            return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+        safe_user_id = escape_like_pattern(user_id)
+        safe_conv_id = escape_like_pattern(conversation_id)
+
+        user_pattern = f'%"user_id": "{safe_user_id}"%'
+        conv_pattern = f'%"conversation_id": "{safe_conv_id}"%'
+
         with self._connect() as conn:
             conn.execute(
                 """
-                UPDATE task_queue 
+                UPDATE task_queue
                 SET status = 'cancelled', updated_at = ?
-                WHERE task_type = 'extract_profile' 
-                AND status = 'pending' 
-                AND payload LIKE ?
+                WHERE task_type = 'extract_profile'
+                AND status = 'pending'
+                AND payload LIKE ? ESCAPE '\\' AND payload LIKE ? ESCAPE '\\'
                 """,
-                (datetime.now().isoformat(), search_pattern)
+                (datetime.now().isoformat(), user_pattern, conv_pattern)
             )
             conn.commit()
 
@@ -287,7 +302,7 @@ class ProfileService:
             # 如果不存在，创建空档案
             return HealthProfile(
                 user_id=user_id,
-                baby_info=BabyInfo(age_months=0, gender="unknown"),
+                baby_info=BabyInfo(age_months=0, gender=None),
                 allergy_history=[],
                 medical_history=[],
                 medication_history=[],
@@ -402,11 +417,17 @@ class MemberProfileService:
 
     def __init__(self, db_path: str):
         self.db_path = db_path
+        self._db_lock = threading.Lock()
 
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        return conn
+    @contextmanager
+    def _connect(self):
+        with self._db_lock:
+            conn = sqlite3.connect(self.db_path, check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            try:
+                yield conn
+            finally:
+                conn.close()
 
     def init_member_tables(self) -> None:
         """初始化成员档案相关表"""
@@ -573,6 +594,25 @@ class MemberProfileService:
 
     def upsert_vital_signs(self, vital_signs: VitalSigns) -> None:
         """更新或插入体征信息"""
+        # 数据校验
+        if vital_signs.height_cm <= 0:
+            raise ValueError("身高必须大于0")
+        if vital_signs.height_cm < 20 or vital_signs.height_cm > 250:
+            raise ValueError("身高数值不合理 (20-250cm)")
+            
+        if vital_signs.weight_kg <= 0:
+            raise ValueError("体重必须大于0")
+        if vital_signs.weight_kg > 300:
+            raise ValueError("体重数值不合理 (max 300kg)")
+            
+        if vital_signs.blood_sugar is not None:
+            if vital_signs.blood_sugar < 0.5 or vital_signs.blood_sugar > 50.0:
+                raise ValueError("血糖数值不合理")
+                
+        if vital_signs.blood_pressure_systolic and vital_signs.blood_pressure_diastolic:
+            if vital_signs.blood_pressure_systolic <= vital_signs.blood_pressure_diastolic:
+                raise ValueError("收缩压应大于舒张压")
+
         vital_signs.updated_at = datetime.now()
 
         # 计算BMI
@@ -625,6 +665,27 @@ class MemberProfileService:
             )
             conn.commit()
 
+    def calculate_age_months(self, birth_date_str: str) -> int:
+        """根据出生日期计算月龄"""
+        from datetime import date
+        try:
+            birth_date = date.fromisoformat(birth_date_str)
+            today = date.today()
+            
+            # 计算年份差和月份差
+            years = today.year - birth_date.year
+            months = today.month - birth_date.month
+            
+            total_months = years * 12 + months
+            
+            # 如果当前日期小于出生日期的日，减去1个月
+            if today.day < birth_date.day:
+                total_months -= 1
+                
+            return total_months
+        except Exception:
+            return 0
+
     def _calculate_bmi_status(self, bmi: float) -> BMIStatus:
         """根据BMI值计算状态"""
         if bmi < 18.5:
@@ -649,11 +710,17 @@ class HealthHistoryService:
 
     def __init__(self, db_path: str):
         self.db_path = db_path
+        self._db_lock = threading.Lock()
 
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        return conn
+    @contextmanager
+    def _connect(self):
+        with self._db_lock:
+            conn = sqlite3.connect(self.db_path, check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            try:
+                yield conn
+            finally:
+                conn.close()
 
     def init_history_tables(self) -> None:
         """初始化健康史相关表"""
@@ -766,16 +833,30 @@ class HealthHistoryService:
 
     def get_history_summary(self, member_id: str) -> Dict[str, Any]:
         """获取健康史摘要（用于首页展示）"""
-        return {
-            "allergy_count": len(self.get_allergy_history(member_id)),
-            "medical_count": len(self.get_medical_history(member_id)),
-            "family_count": len(self.get_family_history(member_id)),
-            "medication_count": len(self.get_medication_history(member_id)),
-            "allergy_preview": self._get_preview(self.get_allergy_history(member_id), "allergen"),
-            "medical_preview": self._get_preview(self.get_medical_history(member_id), "condition"),
-            "family_preview": self._get_preview(self.get_family_history(member_id), "condition"),
-            "medication_preview": self._get_preview(self.get_medication_history(member_id), "drug_name"),
-        }
+        with self._connect() as conn:
+            tables = [
+                ("allergy_history", "allergy", "allergen"),
+                ("medical_history", "medical", "condition"),
+                ("family_history", "family", "condition"),
+                ("medication_history", "medication", "drug_name"),
+            ]
+            result = {}
+            for table, key, preview_field in tables:
+                count = conn.execute(
+                    f"SELECT COUNT(*) as c FROM {table} WHERE member_id=?",
+                    (member_id,)
+                ).fetchone()["c"]
+                result[f"{key}_count"] = count
+
+                if count > 0:
+                    first = conn.execute(
+                        f"SELECT {preview_field} FROM {table} WHERE member_id=? LIMIT 1",
+                        (member_id,)
+                    ).fetchone()
+                    result[f"{key}_preview"] = f"{first[0]}等{count}项"
+                else:
+                    result[f"{key}_preview"] = "暂无记录"
+        return result
 
     def _get_preview(self, items: List[Dict], key: str) -> str:
         """获取预览文本"""
@@ -865,11 +946,17 @@ class HealthRecordsService:
 
     def __init__(self, db_path: str):
         self.db_path = db_path
+        self._db_lock = threading.Lock()
 
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        return conn
+    @contextmanager
+    def _connect(self):
+        with self._db_lock:
+            conn = sqlite3.connect(self.db_path, check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            try:
+                yield conn
+            finally:
+                conn.close()
 
     def init_records_tables(self) -> None:
         """初始化健康记录相关表"""

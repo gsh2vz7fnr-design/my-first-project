@@ -5,6 +5,7 @@ import json
 import os
 import math
 import re
+import time
 from collections import Counter
 from typing import List, Dict, Any, Optional
 from loguru import logger
@@ -27,9 +28,23 @@ class RAGService:
         self.embedding_model = settings.EMBEDDING_MODEL
         self.knowledge_base = self._load_knowledge_base()
         self.embeddings_cache = {}
-        self.remote_available = bool(settings.DEEPSEEK_API_KEY)
+        self._api_key_configured = bool(settings.DEEPSEEK_API_KEY)
+        self._remote_cooldown_until: float = 0.0
         self._doc_token_counts: List[Counter] = []
         self._build_local_index()
+
+    @property
+    def remote_available(self) -> bool:
+        if not self._api_key_configured:
+            return False
+        return time.time() >= self._remote_cooldown_until
+
+    @remote_available.setter
+    def remote_available(self, value: bool):
+        if not value:
+            self._remote_cooldown_until = time.time() + 60  # 60秒冷却
+        else:
+            self._remote_cooldown_until = 0.0
 
     def _load_knowledge_base(self) -> List[Dict[str, Any]]:
         """加载知识库"""
@@ -155,18 +170,58 @@ class RAGService:
         # 如果向量检索不可用或为了增强效果，计算关键词分数
         keyword_candidates = []
         query_counter = self._text_to_counter(query)
-        
+
+        # 同义词映射：口语化表达 → 标准术语
+        synonym_mapping = {
+            "拉肚子": "腹泻", "拉稀": "腹泻",
+            "发烧": "发热", "高烧": "发热",
+            "吐": "呕吐", "吐奶": "呕吐",
+            "咳": "咳嗽",
+            "起疹子": "皮疹", "湿疹": "皮疹",
+            "摔伤": "摔倒", "跌倒": "摔倒", "跌落": "摔倒",
+            "便秘": "大便困难"
+        }
+
+        # 对查询进行同义词扩展
+        expanded_query_tokens = set(query_counter.keys())
+        for token in list(query_counter.keys()):
+            if token in synonym_mapping:
+                expanded_query_tokens.add(synonym_mapping[token])
+
+        # 也需要反向扩展：如果文档有标准术语，查询有口语表达，应该匹配
+        reverse_synonym_mapping = {v: k for k, v in synonym_mapping.items()}
+        for token in list(query_counter.keys()):
+            if token in reverse_synonym_mapping:
+                expanded_query_tokens.add(reverse_synonym_mapping[token])
+
         for idx, entry in enumerate(self.knowledge_base):
             if filters and not self._match_filters(entry, filters):
                 continue
-            
+
             # 使用简单的词频重合度作为关键词分数
             keyword_score = self._cosine_similarity_counts(query_counter, self._doc_token_counts[idx])
-            
-            # 标题匹配加权
-            if entry.get("title", "") in query:
+
+            # 标题匹配加权 - 双向检查
+            title = entry.get("title", "")
+            # 检查标题是否在查询中
+            if title and title in query:
                 keyword_score += 0.5
-                
+            # 检查查询关键词（含同义词）是否在标题中 - 使用子字符串匹配
+            elif title:
+                # 对于中文词汇，使用子字符串匹配更可靠
+                for query_token in expanded_query_tokens:
+                    if len(query_token) > 1 and query_token in title:
+                        keyword_score += 0.4
+                        break
+
+            # 标签匹配加权 - 同样使用子字符串匹配
+            tags = entry.get("tags", [])
+            for tag in tags:
+                for query_token in expanded_query_tokens:
+                    if len(query_token) > 1 and query_token in tag:
+                        keyword_score += 0.2
+                        break
+
             keyword_candidates.append({
                 "entry": entry,
                 "keyword_score": keyword_score
@@ -240,13 +295,35 @@ class RAGService:
             # 规则1: 精确短语匹配奖励
             if query in content:
                 rerank_score += 0.2
-                
+
             # 规则2: 关键医学实体匹配 (模拟)
             # 比如查询包含"泰诺林"，文档标题也包含
             if "泰诺林" in query and "泰诺林" in title:
                 rerank_score += 0.3
             if "美林" in query and "美林" in title:
                 rerank_score += 0.3
+
+            # 规则3: 同义词/口语化表达匹配奖励
+            # 如果查询包含 "拉肚子" 而文档包含 "腹泻"
+            diarrhea_keywords = ["拉肚子", "拉稀", "腹泻"]
+            if any(kw in query for kw in diarrhea_keywords) and "腹泻" in title:
+                rerank_score += 0.2
+
+            fever_keywords = ["发烧", "发热", "高烧"]
+            if any(kw in query for kw in fever_keywords) and any(kw in title for kw in fever_keywords):
+                rerank_score += 0.2
+
+            cough_keywords = ["咳嗽", "咳"]
+            if any(kw in query for kw in cough_keywords) and "咳嗽" in title:
+                rerank_score += 0.2
+
+            vomit_keywords = ["呕吐", "吐", "吐奶"]
+            if any(kw in query for kw in vomit_keywords) and "呕吐" in title:
+                rerank_score += 0.2
+
+            rash_keywords = ["皮疹", "疹子", "湿疹"]
+            if any(kw in query for kw in rash_keywords) and "皮疹" in title:
+                rerank_score += 0.2
                 
             # 规则3: 负向惩罚 (如果查询是"不发烧"但文档全是"发烧")
             # (略，过于复杂)
@@ -476,7 +553,38 @@ class RAGService:
         return results
 
     def _text_to_counter(self, text: str) -> Counter:
-        tokens = re.findall(r"[a-zA-Z0-9]+|[\u4e00-\u9fff]", text.lower())
+        """将文本转换为词频计数器，优先匹配常见医学词汇"""
+        text_lower = text.lower()
+
+        # 常见医学词汇列表（优先匹配长词）
+        medical_terms = [
+            # 症状
+            "拉肚子", "腹泻", "发烧", "发热", "咳嗽", "呕吐", "皮疹", "湿疹",
+            "惊厥", "抽搐", "呼吸困难", "昏迷", "便秘", "摔倒", "跌落", "摔伤",
+            "脱水", "补液", "嗜睡", "精神萎靡",
+            # 通用
+            "宝宝", "婴儿", "幼儿", "儿童",
+            # 时间
+            "小时", "分钟", "天", "周", "月", "年"
+        ]
+
+        tokens = []
+        remaining = text_lower
+
+        # 先匹配医学词汇
+        for term in sorted(medical_terms, key=len, reverse=True):
+            while term in remaining:
+                tokens.append(term)
+                # 替换已匹配的部分为空格，避免重复匹配
+                remaining = remaining.replace(term, " ", 1)
+
+        # 对剩余文本按单字分词
+        for char in remaining:
+            if re.match(r"[a-zA-Z0-9]", char):
+                tokens.append(char)
+            elif re.match(r"[\u4e00-\u9fff]", char):
+                tokens.append(char)
+
         return Counter(tokens)
 
     def _cosine_similarity_counts(self, c1: Counter, c2: Counter) -> float:

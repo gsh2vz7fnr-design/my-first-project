@@ -2,6 +2,8 @@
 对话历史服务 - SQLite 存储
 """
 import sqlite3
+import threading
+from contextlib import contextmanager
 from datetime import datetime
 from typing import List, Dict, Optional
 
@@ -15,11 +17,17 @@ class ConversationService:
 
     def __init__(self, db_path: str):
         self.db_path = db_path
+        self._db_lock = threading.Lock()
 
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        return conn
+    @contextmanager
+    def _connect(self):
+        with self._db_lock:
+            conn = sqlite3.connect(self.db_path, check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            try:
+                yield conn
+            finally:
+                conn.close()
 
     def init_db(self) -> None:
         """初始化数据库"""

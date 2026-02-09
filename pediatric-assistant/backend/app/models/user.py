@@ -94,7 +94,7 @@ class BabyInfo(BaseModel):
     """宝宝基本信息"""
     age_months: Optional[int] = Field(None, description="月龄")
     weight_kg: Optional[float] = Field(None, description="体重(kg)")
-    gender: Optional[str] = Field(None, description="性别: male/female")
+    gender: Optional[Gender] = Field(None, description="性别")
 
 
 class AllergyRecord(BaseModel):
@@ -181,7 +181,7 @@ class StreamChunk(BaseModel):
 
 class Intent(BaseModel):
     """意图"""
-    type: str = Field(..., description="意图类型: triage/consult/medication/care")
+    type: str = Field(..., description="意图类型: triage/consult/medication/care/greeting/slot_filling")
     confidence: float = Field(..., description="置信度")
 
 
@@ -388,3 +388,38 @@ class ProfileConfirmRequest(BaseModel):
     """档案确认请求"""
     confirm: List[Dict[str, Any]] = Field(default_factory=list, description="确认列表")
     reject: List[Dict[str, Any]] = Field(default_factory=list, description="拒绝列表")
+
+
+# ============ 健康史请求模型 ============
+
+class AddAllergyRequest(BaseModel):
+    """添加过敏记录请求"""
+    allergen: str = Field(..., min_length=1)
+    reaction: str = Field(..., min_length=1)
+    severity: str = Field("mild")
+    date: Optional[str] = None
+
+
+class AddMedicalHistoryRequest(BaseModel):
+    """添加既往病史请求"""
+    condition: str = Field(..., min_length=1)
+    diagnosis_date: Optional[str] = None
+    treatment: Optional[str] = None
+    status: str = Field("ongoing")
+    hospital: Optional[str] = None
+
+
+class AddFamilyHistoryRequest(BaseModel):
+    """添加家族病史请求"""
+    condition: str = Field(..., min_length=1)
+    relative: str = Field(..., min_length=1)
+
+
+class AddMedicationHistoryRequest(BaseModel):
+    """添加用药史请求"""
+    drug_name: str = Field(..., min_length=1)
+    dosage: Optional[str] = None
+    frequency: Optional[str] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    reason: Optional[str] = None

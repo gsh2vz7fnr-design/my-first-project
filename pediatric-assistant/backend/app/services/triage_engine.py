@@ -145,7 +145,13 @@ class TriageEngine:
             if "十" in value:
                 parts = value.split("十")
                 left = cn_map.get(parts[0], 1) if parts[0] else 1
-                right = cn_map.get(parts[1], 0) if len(parts) > 1 else 0
+                # 取 parts[1] 的第一个中文字符查找映射（如"六个月"取"六"）
+                right = 0
+                if len(parts) > 1 and parts[1]:
+                    for ch in parts[1]:
+                        if ch in cn_map:
+                            right = cn_map[ch]
+                            break
                 return float(left * 10 + right)
             for ch, num in cn_map.items():
                 if ch in value:
@@ -326,48 +332,6 @@ class TriageEngine:
 
         return questions.get(slot, f"请补充：{slot}")
 
-    def make_triage_decision(
-        self,
-        symptom: str,
-        entities: Dict[str, Any]
-    ) -> TriageDecision:
-        """
-        做出分诊决策
-
-        Args:
-            symptom: 症状
-            entities: 实体
-
-        Returns:
-            TriageDecision: 分诊决策
-        """
-        # 1. 首先检查危险信号
-        danger_alert = self.check_danger_signals(entities)
-        if danger_alert:
-            return TriageDecision(
-                level="emergency",
-                reason="检测到危险信号",
-                action=danger_alert,
-                danger_signal=danger_alert
-            )
-
-        # 2. 基于症状和实体做决策
-        if symptom == "发烧":
-            return self._triage_fever(entities)
-        elif symptom == "摔倒":
-            return self._triage_fall(entities)
-        elif symptom == "呕吐":
-            return self._triage_vomit(entities)
-        elif symptom == "腹泻":
-            return self._triage_diarrhea(entities)
-        else:
-            # 默认建议
-            return TriageDecision(
-                level="observe",
-                reason="症状不明确",
-                action="建议先在家观察，如症状加重请及时就医"
-            )
-
     def _triage_fever(self, entities: Dict[str, Any]) -> TriageDecision:
         """发烧分诊"""
         age_months = self._to_number(entities.get("age_months"))
@@ -384,7 +348,8 @@ class TriageEngine:
             )
 
         # 高热 + 精神萎靡 -> 立即就医
-        if temperature and "39" in str(temperature) and "萎靡" in mental_state:
+        temp_value = self._to_number(temperature)
+        if temp_value is not None and temp_value >= 39.0 and "萎靡" in mental_state:
             return TriageDecision(
                 level="emergency",
                 reason="高热且精神状态不佳",
@@ -419,6 +384,8 @@ class TriageEngine:
             return value * 24
         if "小时" in duration:
             return value
+        if "分钟" in duration:
+            return value / 60.0
         return 0.0
 
     def _triage_fall(self, entities: Dict[str, Any]) -> TriageDecision:

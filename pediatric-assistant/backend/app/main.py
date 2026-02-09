@@ -1,6 +1,7 @@
 """
 FastAPI 应用入口
 """
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -14,6 +15,27 @@ from app.services.profile_service import profile_service
 from app.services.conversation_service import conversation_service
 from app.middleware.performance import performance_monitor
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """应用生命周期管理"""
+    # startup
+    logger.info(f"{settings.APP_NAME} v{settings.APP_VERSION} 启动中...")
+    logger.info(f"调试模式: {settings.DEBUG}")
+    logger.info(f"大模型: {settings.DEEPSEEK_MODEL}")
+    if not settings.DEEPSEEK_API_KEY:
+        logger.warning("未配置 DEEPSEEK_API_KEY，LLM/RAG 调用将失败")
+    if not settings.SECRET_KEY:
+        logger.warning("未配置 SECRET_KEY，请在生产环境中设置")
+    profile_service.init_db()
+    conversation_service.init_db()
+    asyncio.create_task(profile_service.start_worker())
+    yield
+    # shutdown
+    logger.info(f"{settings.APP_NAME} 正在关闭...")
+    performance_monitor.print_statistics()
+
+
 # 创建FastAPI应用
 app = FastAPI(
     title=settings.APP_NAME,
@@ -21,15 +43,17 @@ app = FastAPI(
     description="智能儿科分诊与护理助手API",
     docs_url="/docs" if settings.DEBUG else None,
     redoc_url="/redoc" if settings.DEBUG else None,
+    lifespan=lifespan,
 )
 
 # 配置CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.ALLOWED_ORIGINS,
+    allow_origins=["*"],  # 开发环境允许所有来源
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 # 性能监控中间件
@@ -90,35 +114,11 @@ async def get_performance_summary():
     }
 
 
-@app.on_event("startup")
-async def startup_event():
-    """应用启动事件"""
-    logger.info(f"{settings.APP_NAME} v{settings.APP_VERSION} 启动中...")
-    logger.info(f"调试模式: {settings.DEBUG}")
-    logger.info(f"大模型: {settings.DEEPSEEK_MODEL}")
-    if not settings.DEEPSEEK_API_KEY:
-        logger.warning("未配置 DEEPSEEK_API_KEY，LLM/RAG 调用将失败")
-    profile_service.init_db()
-    conversation_service.init_db()
-    
-    # 启动后台任务工作线程
-    asyncio.create_task(profile_service.start_worker())
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """应用关闭事件"""
-    logger.info(f"{settings.APP_NAME} 正在关闭...")
-
-    # Print performance statistics
-    performance_monitor.print_statistics()
-
-
 if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run(
-        "main:app",
+        "app.main:app",
         host="0.0.0.0",
         port=8000,
         reload=settings.DEBUG,

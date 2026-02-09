@@ -146,6 +146,8 @@ function escapeHtml(text) {
 function formatMessage(text) {
   if (!text) return "";
   let safe = escapeHtml(text);
+  safe = safe.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+  safe = safe.replace(/\*(.+?)\*/g, "<em>$1</em>");
   safe = safe.replace(/\n/g, "<br />");
   safe = safe.replace(/【来源:([^】]+)】/g, (match, id) => {
     return `<span class="citation">【来源:${id}】</span>`;
@@ -1035,37 +1037,10 @@ function showCreateMemberForm() {
         });
 
         if (memberResponse.ok) {
-          // 创建体征记录
           const memberResult = await memberResponse.json();
           const memberId = memberResult.data.member_id;
 
-          await fetch(`${API_BASE}/api/v1/profile/members/${memberId}/vital-signs`, {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              member_id: memberId,
-              height_cm: data.height_cm,
-              weight_kg: data.weight_kg,
-              blood_pressure_systolic: data.blood_pressure_systolic,
-              blood_pressure_diastolic: data.blood_pressure_diastolic,
-              blood_sugar: data.blood_sugar,
-              blood_sugar_type: data.blood_sugar_type,
-            }),
-          });
-
-          // 创建生活习惯记录
-          await fetch(`${API_BASE}/api/v1/profile/members/${memberId}/habits`, {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              member_id: memberId,
-              diet_habit: data.diet_habit,
-              exercise_habit: data.exercise_habit,
-              sleep_quality: data.sleep_quality,
-            }),
-          });
-
-          // 重新加载数据
+          // 重新加载数据（后端 create_member 已处理体征和习惯）
           form.element.remove();
           await loadHealthData();
         } else {

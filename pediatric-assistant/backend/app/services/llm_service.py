@@ -3,6 +3,7 @@
 """
 import json
 import re
+import time
 from typing import Dict, Any, Optional, AsyncGenerator, List
 from loguru import logger
 from openai import OpenAI
@@ -22,7 +23,21 @@ class LLMService:
             timeout=10
         )
         self.model = settings.DEEPSEEK_MODEL
-        self.remote_available = bool(settings.DEEPSEEK_API_KEY)
+        self._api_key_configured = bool(settings.DEEPSEEK_API_KEY)
+        self._remote_cooldown_until: float = 0.0
+
+    @property
+    def remote_available(self) -> bool:
+        if not self._api_key_configured:
+            return False
+        return time.time() >= self._remote_cooldown_until
+
+    @remote_available.setter
+    def remote_available(self, value: bool):
+        if not value:
+            self._remote_cooldown_until = time.time() + 60  # 60秒冷却
+        else:
+            self._remote_cooldown_until = 0.0
 
     async def extract_intent_and_entities(
         self,
@@ -256,6 +271,8 @@ class LLMService:
 - consult: 咨询（询问护理知识、症状解释）
 - medication: 用药（询问药品用法、剂量）
 - care: 护理（询问日常护理方法）
+- greeting: 闲聊/打招呼（如：你好、谢谢）
+- slot_filling: 补充信息（用户回复上一轮追问的答案）
 
 **需要提取的实体**（如果有）：
 - symptom: 症状（如：发烧、呕吐、腹泻）
@@ -333,12 +350,59 @@ class LLMService:
     def _extract_intent_and_entities_fallback(self, user_input: str) -> IntentAndEntities:
         """意图与实体抽取的本地兜底规则"""
         text = user_input.lower()
+
+        # 0a. Greeting 检测（短文本优先，排除混合意图）
+        greeting_patterns = ["你好", "您好", "嗨", "hi", "hello", "在吗", "在不在", "谢谢", "谢了"]
+        text_stripped = text.strip()
+
+        # 检测是否包含症状关键词（用于排除混合意图）
+        mixed_intent_indicators = [
+            "发烧", "发热", "呕吐", "腹泻", "拉肚子", "咳嗽", "皮疹", "哭闹",
+            "摔", "跌", "惊厥", "抽搐", "呼吸困难", "昏迷", "便秘"
+        ]
+        has_medical_content = any(indicator in text_stripped for indicator in mixed_intent_indicators)
+
+        # 只有在没有医疗内容时才判定为纯 greeting
+        is_pure_greeting = (
+            not has_medical_content and  # 排除混合意图
+            any(text_stripped == g for g in greeting_patterns)  # 完全匹配
+        )
+        if is_pure_greeting:
+            return self._normalize_intent_entities({
+                "intent": "greeting",
+                "intent_confidence": 0.9,
+                "entities": {}
+            }, user_input=user_input)
+
+        # 0b. Slot-filling 检测 (key: value 格式)
+        slot_pattern = re.compile(r'(\w+)\s*[:：]\s*(.+?)(?:\n|$)')
+        slot_matches = slot_pattern.findall(user_input)
+        known_slots = {
+            "mental_state", "duration", "temperature", "age_months",
+            "frequency", "accompanying_symptoms", "fall_height",
+            "stool_character", "cough_type", "rash_location"
+        }
+        if slot_matches and any(k in known_slots for k, _ in slot_matches):
+            entities = {k.strip(): v.strip() for k, v in slot_matches if k.strip()}
+            return self._normalize_intent_entities({
+                "intent": "slot_filling",
+                "intent_confidence": 0.85,
+                "entities": entities
+            }, user_input=user_input)
+
         symptom_map = [
-            "发烧", "摔倒", "呕吐", "腹泻", "咳嗽", "皮疹", "哭闹",
-            "惊厥", "抽搐", "呼吸困难", "昏迷", "吞异物", "误吞"
+            "发烧", "发热", "高烧",
+            "摔倒", "摔伤", "跌倒", "跌落",
+            "呕吐", "吐奶",
+            "腹泻", "拉肚子", "拉稀",
+            "咳嗽", "咳",
+            "皮疹", "起疹子", "湿疹",
+            "哭闹",
+            "惊厥", "抽搐", "呼吸困难", "昏迷", "吞异物", "误吞",
+            "便秘"
         ]
         medication_keywords = ["泰诺林", "美林", "布洛芬", "对乙酰氨基酚", "维生素", "补液盐", "药", "用药"]
-        care_keywords = ["护理", "怎么办", "怎么做", "照顾"]
+        care_keywords = ["护理", "怎么办", "怎么做", "照顾", "如何", "怎么", "什么"]
 
         intent_type = "consult"
         if any(k in user_input for k in symptom_map):
@@ -350,7 +414,17 @@ class LLMService:
 
         entities: Dict[str, Any] = {}
 
-        for symptom in ["发烧", "摔倒", "呕吐", "腹泻", "咳嗽", "皮疹", "哭闹"]:
+        for symptom in [
+            "发烧", "发热", "高烧",
+            "摔倒", "摔伤", "跌倒", "跌落",
+            "呕吐", "吐奶",
+            "腹泻", "拉肚子", "拉稀",
+            "咳嗽", "咳",
+            "皮疹", "起疹子", "湿疹",
+            "哭闹",
+            "惊厥", "抽搐", "呼吸困难", "昏迷", "吞异物", "误吞",
+            "便秘"
+        ]:
             if symptom in user_input:
                 entities["symptom"] = symptom
                 break
@@ -441,13 +515,17 @@ class LLMService:
         mapping = {
             "发热": "发烧",
             "高热": "发烧",
+            "高烧": "发烧",
             "摔伤": "摔倒",
             "跌落": "摔倒",
             "跌倒": "摔倒",
             "摔下": "摔倒",
             "咳": "咳嗽",
             "拉肚子": "腹泻",
-            "起疹子": "皮疹"
+            "拉稀": "腹泻",
+            "吐奶": "呕吐",
+            "起疹子": "皮疹",
+            "湿疹": "皮疹"
         }
         for key, value in mapping.items():
             if key in symptom:
@@ -471,17 +549,24 @@ class LLMService:
         if "拉肚子" in text or "腹泻" in text:
             entities["symptom"] = "腹泻"
 
+        # 修复 Bug #2: 追加前检查是否已包含，避免重复
         if "呕吐" in text or "吐" in text:
-            if entities.get("accompanying_symptoms"):
-                entities["accompanying_symptoms"] += "，呕吐"
-            else:
-                entities["accompanying_symptoms"] = "呕吐"
+            if entities.get("symptom") != "呕吐":
+                existing = entities.get("accompanying_symptoms", "")
+                if "呕吐" not in existing:
+                    if existing:
+                        entities["accompanying_symptoms"] = existing + "，呕吐"
+                    else:
+                        entities["accompanying_symptoms"] = "呕吐"
 
         if "带血" in text or "有血" in text:
-            if entities.get("accompanying_symptoms"):
-                entities["accompanying_symptoms"] += "，带血"
-            else:
-                entities["accompanying_symptoms"] = "带血"
+            existing = entities.get("accompanying_symptoms", "")
+            # 检查是否已包含"带血"或"有血"
+            if "带血" not in existing and "有血" not in existing:
+                if existing:
+                    entities["accompanying_symptoms"] = existing + "，带血"
+                else:
+                    entities["accompanying_symptoms"] = "带血"
 
         if any(k in text for k in ["萎靡", "很蔫", "没精神", "嗜睡"]):
             entities["mental_state"] = "精神萎靡"

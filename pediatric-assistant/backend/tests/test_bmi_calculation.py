@@ -212,7 +212,7 @@ class TestBMICalculation:
 
     def test_bmi_not_calculated_when_height_zero(self):
         """
-        E-1: 身高为0时不计算BMI
+        E-1: 身高为0时不计算BMI -> 应抛出异常
         """
         vital_signs = VitalSigns(
             member_id="test_013",
@@ -220,14 +220,12 @@ class TestBMICalculation:
             weight_kg=10.0
         )
 
-        self.service.upsert_vital_signs(vital_signs)
-
-        # BMI不应被计算
-        assert vital_signs.bmi is None or vital_signs.bmi == 0
+        with pytest.raises(ValueError, match="身高必须大于0"):
+            self.service.upsert_vital_signs(vital_signs)
 
     def test_bmi_not_calculated_when_weight_zero(self):
         """
-        E-5: 体重为0时不计算BMI
+        E-5: 体重为0时不计算BMI -> 应抛出异常
         """
         vital_signs = VitalSigns(
             member_id="test_014",
@@ -235,14 +233,12 @@ class TestBMICalculation:
             weight_kg=0.0
         )
 
-        self.service.upsert_vital_signs(vital_signs)
-
-        # BMI不应被计算
-        assert vital_signs.bmi is None or vital_signs.bmi == 0
+        with pytest.raises(ValueError, match="体重必须大于0"):
+            self.service.upsert_vital_signs(vital_signs)
 
     def test_bmi_not_calculated_when_negative_height(self):
         """
-        E-2: 身高为负数时不计算BMI
+        E-2: 身高为负数时不计算BMI -> 应抛出异常
         """
         vital_signs = VitalSigns(
             member_id="test_015",
@@ -250,14 +246,12 @@ class TestBMICalculation:
             weight_kg=10.0
         )
 
-        self.service.upsert_vital_signs(vital_signs)
-
-        # BMI不应被计算或为异常值
-        assert vital_signs.bmi is None or vital_signs.bmi <= 0
+        with pytest.raises(ValueError, match="身高必须大于0"):
+            self.service.upsert_vital_signs(vital_signs)
 
     def test_bmi_not_calculated_when_negative_weight(self):
         """
-        测试体重为负数时不计算BMI
+        测试体重为负数时不计算BMI -> 应抛出异常
         """
         vital_signs = VitalSigns(
             member_id="test_016",
@@ -265,10 +259,8 @@ class TestBMICalculation:
             weight_kg=-5.0
         )
 
-        self.service.upsert_vital_signs(vital_signs)
-
-        # BMI不应被计算或为异常值
-        assert vital_signs.bmi is None or vital_signs.bmi <= 0
+        with pytest.raises(ValueError, match="体重必须大于0"):
+            self.service.upsert_vital_signs(vital_signs)
 
 
 class TestBMICalculateStatusMethod:

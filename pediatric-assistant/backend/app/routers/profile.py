@@ -9,7 +9,9 @@ from datetime import datetime
 from app.models.user import (
     HealthProfile, ProfileConfirmRequest,
     MemberProfile, VitalSigns, HealthHabits,
-    MemberCreateRequest
+    MemberCreateRequest,
+    AddAllergyRequest, AddMedicalHistoryRequest,
+    AddFamilyHistoryRequest, AddMedicationHistoryRequest
 )
 from app.services.profile_service import profile_service, member_profile_service, health_history_service, health_records_service
 
@@ -397,15 +399,15 @@ async def get_allergy_history(member_id: str):
 
 
 @router.post("/members/{member_id}/history/allergy")
-async def add_allergy(member_id: str, data: Dict[str, Any]):
+async def add_allergy(member_id: str, data: AddAllergyRequest):
     """添加过敏记录"""
     try:
         record_id = health_history_service.add_allergy(
             member_id=member_id,
-            allergen=data.get("allergen"),
-            reaction=data.get("reaction"),
-            severity=data.get("severity", "mild"),
-            date=data.get("date")
+            allergen=data.allergen,
+            reaction=data.reaction,
+            severity=data.severity,
+            date=data.date
         )
         return {
             "code": 0,
@@ -436,16 +438,16 @@ async def get_medical_history(member_id: str):
 
 
 @router.post("/members/{member_id}/history/medical")
-async def add_medical_history(member_id: str, data: Dict[str, Any]):
+async def add_medical_history(member_id: str, data: AddMedicalHistoryRequest):
     """添加既往病史"""
     try:
         record_id = health_history_service.add_medical_history(
             member_id=member_id,
-            condition=data.get("condition"),
-            diagnosis_date=data.get("diagnosis_date"),
-            treatment=data.get("treatment"),
-            status=data.get("status", "ongoing"),
-            hospital=data.get("hospital")
+            condition=data.condition,
+            diagnosis_date=data.diagnosis_date,
+            treatment=data.treatment,
+            status=data.status,
+            hospital=data.hospital
         )
         return {
             "code": 0,
@@ -476,13 +478,13 @@ async def get_family_history(member_id: str):
 
 
 @router.post("/members/{member_id}/history/family")
-async def add_family_history(member_id: str, data: Dict[str, Any]):
+async def add_family_history(member_id: str, data: AddFamilyHistoryRequest):
     """添加家族病史"""
     try:
         record_id = health_history_service.add_family_history(
             member_id=member_id,
-            condition=data.get("condition"),
-            relative=data.get("relative")
+            condition=data.condition,
+            relative=data.relative
         )
         return {
             "code": 0,
@@ -513,17 +515,17 @@ async def get_medication_history(member_id: str):
 
 
 @router.post("/members/{member_id}/history/medication")
-async def add_medication_history(member_id: str, data: Dict[str, Any]):
+async def add_medication_history(member_id: str, data: AddMedicationHistoryRequest):
     """添加用药史"""
     try:
         record_id = health_history_service.add_medication_history(
             member_id=member_id,
-            drug_name=data.get("drug_name"),
-            dosage=data.get("dosage"),
-            frequency=data.get("frequency"),
-            start_date=data.get("start_date"),
-            end_date=data.get("end_date"),
-            reason=data.get("reason")
+            drug_name=data.drug_name,
+            dosage=data.dosage,
+            frequency=data.frequency,
+            start_date=data.start_date,
+            end_date=data.end_date,
+            reason=data.reason
         )
         return {
             "code": 0,

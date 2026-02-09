@@ -6,7 +6,8 @@ from fastapi.responses import StreamingResponse
 from loguru import logger
 import json
 import asyncio
-from typing import AsyncGenerator
+import uuid
+from typing import AsyncGenerator, Optional, List, Dict
 
 from app.models.user import ChatRequest, StreamChunk
 from app.services.llm_service import llm_service
@@ -43,7 +44,7 @@ async def send_message(request: ChatRequest):
 
         # 1. 检查处方意图
         if safety_filter.check_prescription_intent(request.message):
-            conversation_id = request.conversation_id or "new"
+            conversation_id = request.conversation_id or f"conv_{uuid.uuid4().hex[:12]}"
             conversation_service.append_message(conversation_id, request.user_id, "user", request.message)
             return {
                 "code": 0,
@@ -63,9 +64,125 @@ async def send_message(request: ChatRequest):
 
         logger.info(f"意图识别结果: {intent_result}")
 
+        # 2.5a 问候/闲聊路由
+        if intent_result.intent.type == "greeting":
+            conversation_id = request.conversation_id or f"conv_{uuid.uuid4().hex[:12]}"
+            greeting_reply = (
+                "您好！我是智能儿科助手 👋\n\n"
+                "我可以帮您：\n"
+                "• 评估宝宝的症状（发烧、咳嗽、腹泻等）\n"
+                "• 提供科学的居家护理建议\n"
+                "• 判断是否需要就医\n\n"
+                "请描述宝宝的情况，例如：「宝宝8个月，发烧38.5度，精神不好」"
+            )
+            greeting_reply = safety_filter.add_disclaimer(greeting_reply)
+            conversation_service.append_message(conversation_id, request.user_id, "user", request.message)
+            conversation_service.append_message(conversation_id, request.user_id, "assistant", greeting_reply)
+            return {
+                "code": 0,
+                "data": {
+                    "conversation_id": conversation_id,
+                    "message": greeting_reply,
+                    "sources": [],
+                    "metadata": {"intent": "greeting"}
+                }
+            }
+
+        # 2.5b Slot-filling 路由
+        if intent_result.intent.type == "slot_filling":
+            conversation_id = request.conversation_id or f"conv_{uuid.uuid4().hex[:12]}"
+            conversation_service.append_message(conversation_id, request.user_id, "user", request.message)
+
+            merged_entities = intent_result.entities.copy()
+            if not merged_entities.get("symptom"):
+                history = conversation_service.get_history(conversation_id, limit=10)
+                recovered_symptom = _recover_symptom_from_history(history)
+                if recovered_symptom:
+                    merged_entities["symptom"] = recovered_symptom
+
+            symptom = merged_entities.get("symptom", "")
+            if not symptom:
+                follow_up = "为了继续分诊，请先告诉我宝宝的主要症状（如发烧、咳嗽、腹泻等）。"
+                conversation_service.append_message(conversation_id, request.user_id, "assistant", follow_up)
+                return {
+                    "code": 0,
+                    "data": {
+                        "conversation_id": conversation_id,
+                        "message": follow_up,
+                        "sources": [],
+                        "metadata": {
+                            "intent": "slot_filling",
+                            "need_follow_up": True,
+                            "missing_slots": ["symptom"]
+                        }
+                    }
+                }
+
+            danger_alert = triage_engine.check_danger_signals(merged_entities)
+            if danger_alert:
+                conversation_service.append_message(conversation_id, request.user_id, "assistant", danger_alert)
+                return {
+                    "code": 0,
+                    "data": {
+                        "conversation_id": conversation_id,
+                        "message": danger_alert,
+                        "sources": [],
+                        "metadata": {
+                            "intent": "triage",
+                            "origin_intent": "slot_filling",
+                            "triage_level": "emergency",
+                            "danger_signal": True
+                        }
+                    }
+                }
+
+            missing_slots = triage_engine.get_missing_slots(
+                symptom,
+                merged_entities,
+                profile_context=context
+            )
+
+            if missing_slots:
+                follow_up = triage_engine.generate_follow_up_question(symptom, missing_slots)
+                conversation_service.append_message(conversation_id, request.user_id, "assistant", follow_up)
+                return {
+                    "code": 0,
+                    "data": {
+                        "conversation_id": conversation_id,
+                        "message": follow_up,
+                        "sources": [],
+                        "metadata": {
+                            "intent": "triage",
+                            "origin_intent": "slot_filling",
+                            "need_follow_up": True,
+                            "missing_slots": missing_slots
+                        }
+                    }
+                }
+
+            decision = triage_engine.make_triage_decision(symptom, merged_entities)
+            response_message = f"**{decision.reason}**\n\n{decision.action}"
+            response_message = safety_filter.add_disclaimer(response_message)
+            conversation_service.append_message(conversation_id, request.user_id, "assistant", response_message)
+
+            return {
+                "code": 0,
+                "data": {
+                    "conversation_id": conversation_id,
+                    "message": response_message,
+                    "sources": [],
+                    "metadata": {
+                        "intent": "triage",
+                        "origin_intent": "slot_filling",
+                        "triage_level": decision.level,
+                        "entities": merged_entities
+                    }
+                }
+            }
+
         # 3. 如果是分诊意图，进行分诊
         if intent_result.intent.type == "triage":
-            conversation_id = request.conversation_id or "new"
+            conversation_id = request.conversation_id or f"conv_{uuid.uuid4().hex[:12]}"
             conversation_service.append_message(conversation_id, request.user_id, "user", request.message)
             # 检查危险信号
             danger_alert = triage_engine.check_danger_signals(intent_result.entities)
@@ -144,7 +261,7 @@ async def send_message(request: ChatRequest):
         # 安全过滤
         safety_result = safety_filter.filter_output(rag_result.answer)
         if not safety_result.is_safe:
-            conversation_id = request.conversation_id or "new"
+            conversation_id = request.conversation_id or f"conv_{uuid.uuid4().hex[:12]}"
             conversation_service.append_message(conversation_id, request.user_id, "user", request.message)
             conversation_service.append_message(conversation_id, request.user_id, "assistant", safety_result.fallback_message)
             return {
@@ -165,7 +282,7 @@ async def send_message(request: ChatRequest):
 
         # 添加免责声明
         response_message = safety_filter.add_disclaimer(response_message)
-        conversation_id = request.conversation_id or "new"
+        conversation_id = request.conversation_id or f"conv_{uuid.uuid4().hex[:12]}"
         conversation_service.append_message(conversation_id, request.user_id, "user", request.message)
         conversation_service.append_message(conversation_id, request.user_id, "assistant", response_message)
 
@@ -244,6 +361,149 @@ async def send_message_stream(request: ChatRequest):
                 context=context
             )
 
+            # 2.5a 问候/闲聊路由
+            if intent_result.intent.type == "greeting":
+                greeting_reply = (
+                    "您好！我是智能儿科助手 👋\n\n"
+                    "我可以帮您：\n"
+                    "• 评估宝宝的症状（发烧、咳嗽、腹泻等）\n"
+                    "• 提供科学的居家护理建议\n"
+                    "• 判断是否需要就医\n\n"
+                    "请描述宝宝的情况，例如：「宝宝8个月，发烧38.5度，精神不好」"
+                )
+                greeting_reply = safety_filter.add_disclaimer(greeting_reply)
+                conversation_service.append_message(conversation_id, request.user_id, "user", request.message)
+                conversation_service.append_message(conversation_id, request.user_id, "assistant", greeting_reply)
+
+                metadata_chunk = StreamChunk(type="metadata", metadata={"intent": "greeting"})
+                yield f"data: {metadata_chunk.model_dump_json()}\n\n"
+
+                chunk = StreamChunk(type="content", content=greeting_reply)
+                yield f"data: {chunk.model_dump_json()}\n\n"
+                yield "data: {\"type\": \"done\"}\n\n"
+                return
+
+            # 2.5b Slot-filling 路由
+            if intent_result.intent.type == "slot_filling":
+                conversation_service.append_message(conversation_id, request.user_id, "user", request.message)
+
+                merged_entities = intent_result.entities.copy()
+                if not merged_entities.get("symptom"):
+                    history = conversation_service.get_history(conversation_id, limit=10)
+                    recovered_symptom = _recover_symptom_from_history(history)
+                    if recovered_symptom:
+                        merged_entities["symptom"] = recovered_symptom
+
+                symptom = merged_entities.get("symptom", "")
+                if not symptom:
+                    follow_up = "为了继续分诊，请先告诉我宝宝的主要症状（如发烧、咳嗽、腹泻等）。"
+                    conversation_service.append_message(conversation_id, request.user_id, "assistant", follow_up)
+                    metadata_chunk = StreamChunk(
+                        type="metadata",
+                        metadata={
+                            "intent": "slot_filling",
+                            "need_follow_up": True,
+                            "missing_slots": ["symptom"]
+                        }
+                    )
+                    yield f"data: {metadata_chunk.model_dump_json()}\n\n"
+
+                    chunk = StreamChunk(type="content", content=follow_up)
+                    yield f"data: {chunk.model_dump_json()}\n\n"
+                    yield "data: {\"type\": \"done\"}\n\n"
+                    return
+
+                danger_alert = triage_engine.check_danger_signals(merged_entities)
+                if danger_alert:
+                    conversation_service.append_message(conversation_id, request.user_id, "assistant", danger_alert)
+
+                    metadata_chunk = StreamChunk(
+                        type="metadata",
+                        metadata={
+                            "intent": "triage",
+                            "origin_intent": "slot_filling",
+                            "triage_level": "emergency",
+                            "danger_signal": True
+                        }
+                    )
+                    yield f"data: {metadata_chunk.model_dump_json()}\n\n"
+
+                    chunk = StreamChunk(type="content", content=danger_alert)
+                    yield f"data: {chunk.model_dump_json()}\n\n"
+                    yield "data: {\"type\": \"done\"}\n\n"
+                    return
+
+                missing_slots = triage_engine.get_missing_slots(
+                    symptom,
+                    merged_entities,
+                    profile_context=context
+                )
+
+                if missing_slots:
+                    follow_up = triage_engine.generate_follow_up_question(symptom, missing_slots)
+                    conversation_service.append_message(conversation_id, request.user_id, "assistant", follow_up)
+
+                    slot_definitions = {}
+                    for slot in missing_slots:
+                        slot_definitions[slot] = {
+                            "type": _get_slot_type(slot),
+                            "label": _get_slot_label(slot),
+                            "required": True,
+                            "options": _get_slot_options(slot),
+                            "min": _get_slot_min(slot),
+                            "max": _get_slot_max(slot),
+                            "step": _get_slot_step(slot)
+                        }
+
+                    metadata_chunk = StreamChunk(
+                        type="metadata",
+                        metadata={
+                            "intent": "triage",
+                            "origin_intent": "slot_filling",
+                            "need_follow_up": True,
+                            "missing_slots": slot_definitions
+                        }
+                    )
+                    yield f"data: {metadata_chunk.model_dump_json()}\n\n"
+
+                    chunk = StreamChunk(type="content", content=follow_up)
+                    yield f"data: {chunk.model_dump_json()}\n\n"
+                    yield "data: {\"type\": \"done\"}\n\n"
+                    return
+
+                decision = triage_engine.make_triage_decision(symptom, merged_entities)
+                response_message = f"**{decision.reason}**\n\n{decision.action}"
+                response_message = safety_filter.add_disclaimer(response_message)
+                conversation_service.append_message(conversation_id, request.user_id, "assistant", response_message)
+
+                metadata_chunk = StreamChunk(
+                    type="metadata",
+                    metadata={
+                        "intent": "triage",
+                        "origin_intent": "slot_filling",
+                        "triage_level": decision.level,
+                        "entities": merged_entities
+                    }
+                )
+                yield f"data: {metadata_chunk.model_dump_json()}\n\n"
+
+                asyncio.create_task(
+                    profile_service.schedule_delayed_extraction(
+                        user_id=request.user_id,
+                        conversation_id=conversation_id,
+                        delay_minutes=30
+                    )
+                )
+
+                chunk_size = settings.STREAM_CHUNK_SIZE
+                for i in range(0, len(response_message), chunk_size):
+                    text_chunk = response_message[i:i + chunk_size]
+                    chunk = StreamChunk(type="content", content=text_chunk)
+                    yield f"data: {chunk.model_dump_json()}\n\n"
+
+                yield "data: {\"type\": \"done\"}\n\n"
+                return
+
             # 3. 如果是分诊意图
             if intent_result.intent.type == "triage":
                 conversation_service.append_message(conversation_id, request.user_id, "user", request.message)
@@ -253,7 +513,6 @@ async def send_message_stream(request: ChatRequest):
                 if danger_alert:
                     conversation_service.append_message(conversation_id, request.user_id, "assistant", danger_alert)
 
-                    # Send metadata
                     metadata_chunk = StreamChunk(
                         type="metadata",
                         metadata={
@@ -281,7 +540,6 @@ async def send_message_stream(request: ChatRequest):
                     follow_up = triage_engine.generate_follow_up_question(symptom, missing_slots)
                     conversation_service.append_message(conversation_id, request.user_id, "assistant", follow_up)
 
-                    # Build slot definitions for frontend form
                     slot_definitions = {}
                     for slot in missing_slots:
                         slot_definitions[slot] = {
@@ -294,7 +552,6 @@ async def send_message_stream(request: ChatRequest):
                             "step": _get_slot_step(slot)
                         }
 
-                    # Send metadata
                     metadata_chunk = StreamChunk(
                         type="metadata",
                         metadata={
@@ -310,13 +567,11 @@ async def send_message_stream(request: ChatRequest):
                     yield "data: {\"type\": \"done\"}\n\n"
                     return
 
-                # 做出分诊决策
                 decision = triage_engine.make_triage_decision(symptom, intent_result.entities)
                 response_message = f"**{decision.reason}**\n\n{decision.action}"
                 response_message = safety_filter.add_disclaimer(response_message)
                 conversation_service.append_message(conversation_id, request.user_id, "assistant", response_message)
 
-                # Send metadata
                 metadata_chunk = StreamChunk(
                     type="metadata",
                     metadata={
@@ -335,7 +590,6 @@ async def send_message_stream(request: ChatRequest):
                     )
                 )
 
-                # 分块发送
                 chunk_size = settings.STREAM_CHUNK_SIZE
                 for i in range(0, len(response_message), chunk_size):
                     text_chunk = response_message[i:i + chunk_size]
@@ -486,6 +740,21 @@ async def get_source_snippet(entry_id: str):
 
 
 # ============ Helper Functions ============
+
+
+def _recover_symptom_from_history(history: List[Dict[str, str]]) -> Optional[str]:
+    """从对话历史中恢复最近的症状"""
+    for item in reversed(history):
+        if item.get("role") != "user":
+            continue
+        content = (item.get("content") or "").strip()
+        if not content:
+            continue
+        result = llm_service._extract_intent_and_entities_fallback(content)
+        symptom = result.entities.get("symptom")
+        if symptom:
+            return symptom
+    return None
 
 def _get_slot_type(slot_name: str) -> str:
     """Get slot input type"""
@@ -684,7 +953,6 @@ async def create_conversation(user_id: str):
         dict: 新对话信息
     """
     try:
-        import uuid
         conversation_id = f"conv_{uuid.uuid4().hex[:12]}"
         conversation = conversation_service.create_conversation(conversation_id, user_id)
 

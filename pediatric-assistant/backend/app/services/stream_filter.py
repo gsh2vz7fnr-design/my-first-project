@@ -26,11 +26,11 @@ class StreamSafetyFilter:
         Returns:
             StreamSafetyResult: 检查结果
         """
-        # 将chunk追加到buffer中
-        self.buffer += chunk
-
-        # 使用safety_filter检查
+        # 先检查（此时 buffer 不含当前 chunk）
         result = safety_filter.check_stream_output(chunk, self.buffer)
+
+        # 再追加到buffer
+        self.buffer += chunk
 
         # 如果需要中止，设置标志
         if result.should_abort:
