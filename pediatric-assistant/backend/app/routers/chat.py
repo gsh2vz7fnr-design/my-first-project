@@ -295,12 +295,14 @@ async def send_message(request: ChatRequest):
             )
         )
 
+        # 添加来源元数据
+        sources_metadata = rag_service.get_sources_metadata(rag_result.sources)
         return {
             "code": 0,
             "data": {
                 "conversation_id": conversation_id,
                 "message": response_message,
-                "sources": [s.model_dump() for s in rag_result.sources],
+                "sources": sources_metadata,
                 "metadata": {
                     "intent": intent_result.intent.type,
                     "has_source": rag_result.has_source,
@@ -620,12 +622,15 @@ async def send_message_stream(request: ChatRequest):
             response_message = safety_filter.add_disclaimer(response_message)
 
             # Send metadata
+            # 添加来源元数据
+            sources_metadata = rag_service.get_sources_metadata(rag_result.sources)
             metadata_chunk = StreamChunk(
                 type="metadata",
                 metadata={
                     "intent": intent_result.intent.type,
                     "has_source": rag_result.has_source,
-                    "emotion_detected": emotion_support is not None
+                    "emotion_detected": emotion_support is not None,
+                    "sources": sources_metadata
                 }
             )
             yield f"data: {metadata_chunk.model_dump_json()}\n\n"

@@ -145,14 +145,73 @@ function escapeHtml(text) {
 
 function formatMessage(text) {
   if (!text) return "";
-  let safe = escapeHtml(text);
-  safe = safe.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-  safe = safe.replace(/\*(.+?)\*/g, "<em>$1</em>");
-  safe = safe.replace(/\n/g, "<br />");
-  safe = safe.replace(/【来源:([^】]+)】/g, (match, id) => {
-    return `<span class="citation">【来源:${id}】</span>`;
-  });
-  return safe;
+
+  // 先清理来源标记
+  let clean = text.replace(/【来源:[^】]+】/g, "");
+
+  // 转义 HTML
+  let html = escapeHtml(clean);
+
+  // 处理 Markdown 格式
+  // 1. 处理标题 h3 (### 开头)
+  html = html.replace(/^### (.+)$/gm, "<h3>$1</h3>");
+
+  // 2. 处理加粗 **text**
+  html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+
+  // 3. 处理引用块 > text（注意 > 已被转义为 &gt;）
+  html = html.replace(/^&gt; (.*?)$/gm, "<blockquote>$1</blockquote>");
+  html = html.replace(/^&gt;\s*$/gm, ""); // 空引用行
+  // 合并连续的引用块
+  html = html.replace(/<\/blockquote>\n<blockquote>/g, "<br>");
+
+  // 4. 处理列表和段落（逐行解析）
+  const lines = html.split("\n");
+  let result = [];
+  let inUl = false;
+  let inOl = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    // 跳过已经是 HTML 标签的行（h3, blockquote）
+    if (line.startsWith("<h3>") || line.startsWith("<blockquote>")) {
+      if (inUl) { result.push("</ul>"); inUl = false; }
+      if (inOl) { result.push("</ol>"); inOl = false; }
+      result.push(line);
+      continue;
+    }
+
+    const ulMatch = line.match(/^[ \t]*[-*] (.+)/);
+    const olMatch = line.match(/^[ \t]*(\d+)\. (.+)/);
+
+    if (ulMatch) {
+      if (!inUl) {
+        if (inOl) { result.push("</ol>"); inOl = false; }
+        result.push("<ul class='message-list'>");
+        inUl = true;
+      }
+      result.push(`<li>${ulMatch[1]}</li>`);
+    } else if (olMatch) {
+      if (!inOl) {
+        if (inUl) { result.push("</ul>"); inUl = false; }
+        result.push("<ol class='message-list'>");
+        inOl = true;
+      }
+      result.push(`<li>${olMatch[2]}</li>`);
+    } else {
+      if (inUl) { result.push("</ul>"); inUl = false; }
+      if (inOl) { result.push("</ol>"); inOl = false; }
+      if (line.trim()) {
+        result.push(`<p>${line}</p>`);
+      }
+    }
+  }
+
+  if (inUl) result.push("</ul>");
+  if (inOl) result.push("</ol>");
+
+  return result.join("");
 }
 
 function appendMessage(role, text, options = {}) {
@@ -164,6 +223,13 @@ function appendMessage(role, text, options = {}) {
   if (options.emergency) {
     bubble.querySelector(".bubble").classList.add("emergency");
   }
+
+  // 添加来源折叠组件
+  if (options.sources && options.sources.length > 0) {
+    const sourceToggle = createSourceToggle(options.sources);
+    bubble.querySelector(".bubble").appendChild(sourceToggle);
+  }
+
   // Check if bubble has content before removing empty state
   const empty = chat.querySelector(".chat-empty");
   if (empty) {
@@ -172,6 +238,48 @@ function appendMessage(role, text, options = {}) {
   chat.appendChild(bubble);
   chat.scrollTop = chat.scrollHeight;
   return bubble;
+}
+
+// 创建来源折叠组件
+function createSourceToggle(sources) {
+  const container = document.createElement("div");
+  container.className = "source-toggle-container";
+
+  const toggleBtn = document.createElement("button");
+  toggleBtn.className = "source-toggle-button";
+  toggleBtn.innerHTML = `<span class="source-icon">📚</span> 查看知识来源 (${sources.length})`;
+  toggleBtn.setAttribute("aria-expanded", "false");
+  toggleBtn.setAttribute("type", "button");
+
+  const sourceList = document.createElement("div");
+  sourceList.className = "source-list";
+  sourceList.setAttribute("role", "list");
+  sourceList.style.display = "none";
+
+  sources.forEach((source, index) => {
+    const sourceItem = document.createElement("div");
+    sourceItem.className = "source-item";
+    sourceItem.setAttribute("role", "listitem");
+    sourceItem.innerHTML = `
+      <span class="source-index">${index + 1}</span>
+      <div class="source-info">
+        <div class="source-title">${source.title || "未知来源"}</div>
+        <div class="source-ref">${source.source || ""}</div>
+      </div>
+    `;
+    sourceList.appendChild(sourceItem);
+  });
+
+  toggleBtn.addEventListener("click", () => {
+    const isExpanded = toggleBtn.getAttribute("aria-expanded") === "true";
+    toggleBtn.setAttribute("aria-expanded", !isExpanded);
+    sourceList.style.display = isExpanded ? "none" : "block";
+    toggleBtn.querySelector(".source-icon").textContent = isExpanded ? "📚" : "📖";
+  });
+
+  container.appendChild(toggleBtn);
+  container.appendChild(sourceList);
+  return container;
 }
 
 // Quick Reply configuration
@@ -366,6 +474,7 @@ async function sendMessageStream(text, retryCount = 0) {
   let firstTokenTime = null;
   let streamBubble = null;
   let metadata = null;
+  let streamDone = false;
 
   try {
     const response = await fetch(`${API_BASE}/api/v1/chat/stream`, {
@@ -546,18 +655,32 @@ async function sendMessageStream(text, retryCount = 0) {
               showBanner("⚠️ 安全警示：该回复已被系统拦截。", "warn");
             } else if (data.type === "done") {
               // Complete streaming
+              streamDone = true;
               if (streamBubble) {
-                streamBubble.complete();
+                // 获取完整文本并格式化（去掉光标字符）
+                const fullText = streamBubble.bubble.textContent.replace(/▋/g, "").trim();
+                const formattedHTML = formatMessage(fullText);
+
+                // 更新 bubble 内容（移除 cursor 后设置格式化的 HTML）
+                streamBubble.cursor.remove();
+                streamBubble.bubble.innerHTML = formattedHTML;
+                streamBubble.bubble.classList.remove("bubble-stream");
 
                 // Add triage card if needed
                 if (metadata && metadata.triage_level && metadata.intent === "triage") {
                   const triageCard = createTriageResultCard({
                     level: metadata.triage_level,
                     reason: "根据症状分析",
-                    action: streamBubble.bubble.textContent,
+                    action: fullText,
                   });
                   streamBubble.bubble.innerHTML = "";
                   streamBubble.bubble.appendChild(triageCard);
+                }
+
+                // Add source toggle if sources exist
+                if (metadata && metadata.sources && metadata.sources.length > 0) {
+                  const sourceToggle = createSourceToggle(metadata.sources);
+                  streamBubble.bubble.appendChild(sourceToggle);
                 }
               }
 
@@ -574,9 +697,18 @@ async function sendMessageStream(text, retryCount = 0) {
       }
     }
 
-    // Clean up
-    if (streamBubble) {
-      streamBubble.complete();
+    // Clean up (only if "done" event was NOT already processed)
+    if (streamBubble && !streamDone) {
+      // 格式化并完成（去掉光标字符）
+      const fullText = streamBubble.bubble.textContent.replace(/▋/g, "").trim();
+      if (fullText) {
+        const formattedHTML = formatMessage(fullText);
+        streamBubble.cursor.remove();
+        streamBubble.bubble.innerHTML = formattedHTML;
+        streamBubble.bubble.classList.remove("bubble-stream");
+      } else {
+        streamBubble.complete();
+      }
     }
 
     // Reload conversation list to update metadata

@@ -512,6 +512,95 @@ body {
   box-shadow: var(--shadow-emergency);
 }
 
+/* ========================================
+ * Markdown Content Styling (Notion-like)
+ * ======================================== */
+
+.bubble h3 {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 16px 0 8px 0;
+  padding-bottom: 6px;
+  border-bottom: 2px solid var(--primary-100);
+  line-height: 1.4;
+}
+
+.bubble h3:first-child {
+  margin-top: 0;
+}
+
+.bubble p {
+  margin: 8px 0;
+  line-height: 1.7;
+  font-size: 14px;
+}
+
+.bubble p:first-child {
+  margin-top: 0;
+}
+
+.bubble p:last-child {
+  margin-bottom: 0;
+}
+
+/* Remove margin between h3 and the immediately following element */
+.bubble h3 + p,
+.bubble h3 + ul,
+.bubble h3 + ol {
+  margin-top: 4px;
+}
+
+.bubble strong {
+  color: var(--primary-600);
+  font-weight: 600;
+}
+
+.message.user .bubble strong {
+  color: inherit;
+}
+
+.bubble blockquote {
+  margin: 12px 0;
+  padding: 10px 14px;
+  background: var(--emergency-50);
+  border-left: 4px solid var(--emergency-500);
+  border-radius: var(--radius-sm);
+  color: var(--emergency-700);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.bubble blockquote strong {
+  color: var(--emergency-700);
+}
+
+.bubble .message-list {
+  margin: 8px 0;
+  padding-left: 20px;
+}
+
+.bubble .message-list li {
+  margin: 6px 0;
+  line-height: 1.7;
+  color: var(--text-primary);
+  font-size: 14px;
+  padding-left: 4px;
+}
+
+.bubble ul.message-list {
+  list-style-type: disc;
+}
+
+.bubble ol.message-list {
+  list-style-type: decimal;
+}
+
+/* 确保列表项独占一行 */
+.bubble .message-list li {
+  display: list-item;
+}
+
 .citation {
   font-size: 12px;
   color: var(--emergency-600);
@@ -527,6 +616,95 @@ body {
 
 .citation:hover {
   background: var(--emergency-100);
+}
+
+/* ========================================
+ * Source Toggle (来源折叠组件)
+ * ======================================== */
+
+.source-toggle-container {
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-light);
+}
+
+.source-toggle-button {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-hover);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--easing-default);
+}
+
+.source-toggle-button:hover {
+  background: var(--border-light);
+  color: var(--text-primary);
+}
+
+.source-toggle-button:active {
+  transform: scale(0.98);
+}
+
+.source-icon {
+  font-size: 16px;
+}
+
+.source-list {
+  margin-top: var(--space-2);
+  display: grid;
+  gap: var(--space-2);
+}
+
+.source-item {
+  display: flex;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-hover);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+}
+
+.source-index {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--primary-100);
+  color: var(--primary-600);
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.source-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.source-title {
+  font-weight: 500;
+  color: var(--text-primary);
+  margin-bottom: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-ref {
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ========================================

@@ -39,9 +39,9 @@ from langchain_openai import OpenAIEmbeddings
 class IngestConfig:
     """摄入配置"""
 
-    # 文件路径
-    md_file_part1: str = "/Users/zhang/Desktop/Claude/《美国儿科学会育儿百科》1-600.md"
-    md_file_part2: str = "/Users/zhang/Desktop/Claude/《美国儿科学会育儿百科》601-1054.md"
+    # 文件路径（知识库原始文件已移动到 knowledge_base/raw/）
+    md_file_part1: str = "/Users/zhang/Desktop/Claude/pediatric-assistant/knowledge_base/raw/《美国儿科学会育儿百科》1-600.md"
+    md_file_part2: str = "/Users/zhang/Desktop/Claude/pediatric-assistant/knowledge_base/raw/《美国儿科学会育儿百科》601-1054.md"
 
     # ChromaDB配置
     persist_directory: str = "./chroma_db"
@@ -123,6 +123,271 @@ class TokenCounter:
 
 
 # ============ 主类：MarkdownRAGIngestor ============
+
+import re
+
+class ChunkFilter:
+    """Chunk过滤器 - 清理噪音内容"""
+
+    # 关键词黑名单
+    BLACKLIST_KEYWORDS = [
+        "ISBN",
+        "Copyright",
+        "版权所有",
+        "印张",
+        "开本",
+        "字数",
+        "责任编辑",
+        "责任校对",
+        "责任印制",
+        "CIP数据",
+        "著作权合同",
+        "图书在版编目",
+        "致谢",
+        "致读者",
+        "推荐序",
+        "前言",
+        "全球销量",
+        "权威品牌",
+        "译 者",
+        "策划编辑",
+        "图文制作",
+        "出 版 人",
+        "社 址",
+        "邮政编码",
+        "电话传真",
+        "网 址",
+        "印 刷",
+        "版 次",
+        "印 次",
+        "升级修订",
+        "电子检索",
+        "谨以本书献给",
+    ]
+
+    # 需要屏蔽的h1标题
+    BLACKLIST_H1 = [
+        "升级修订",
+        "美国儿科学会",
+        "育儿百科",
+        "第7版",
+        "·第7版·",
+        "目录",
+        "新版新增",
+        "电子检索功能",
+        "推荐序",
+        "致谢",
+        "致读者",
+        "前言",
+        "第7版序",
+        "谨以本书献给",
+        "孩子给你的礼物",
+        "你给孩子的礼物",
+        '使"给予"成为家庭日常生活的一部分',
+    ]
+
+    # H1前缀黑名单（如果h1以这些开头，则过滤）
+    H1_PREFIX_BLACKLIST = [
+        "引言",
+        "孩子给你的",
+        "你给孩子的",
+        "使",
+        "培养孩子的韧性",
+        "第一部分",
+        "新版新增",
+    ]
+
+    def __init__(self):
+        # 编译正则表达式
+        self.noise_pattern = re.compile(r'\$\textcircled\{[^}]*\}\$')
+        self.page_number_pattern = re.compile(r'^[\s\s]*\d{1,4}\s*$', re.MULTILINE)
+
+    def is_blacklisted_by_keyword(self, text: str) -> bool:
+        """检查是否包含黑名单关键词"""
+        text_lower = text.lower()
+        for keyword in self.BLACKLIST_KEYWORDS:
+            if keyword.lower() in text_lower:
+                return True
+        return False
+
+    def is_blacklisted_by_title(self, h1: str, h2: str) -> bool:
+        """检查标题是否在黑名单中"""
+        # 完全匹配黑名单
+        if h1 in self.BLACKLIST_H1:
+            return True
+        if h2 == "目录" or h2 == "目录":
+            return True
+        # 前缀匹配（过滤序言类内容）
+        for prefix in self.H1_PREFIX_BLACKLIST:
+            if h1.startswith(prefix):
+                return True
+        return False
+
+    def is_table_of_contents(self, text: str) -> bool:
+        """检测是否为目录页"""
+        # 检测换行符密度 - 目录通常有很多短行
+        lines = [line.strip() for line in text.split('\n') if line.strip()]
+        if len(lines) < 5:
+            return False
+
+        # 计算平均行长度
+        avg_line_length = sum(len(line) for line in lines) / len(lines)
+
+        # 如果平均行长度很短，可能是目录
+        if avg_line_length < 15:
+            # 进一步检查是否包含大量页码
+            page_number_count = 0
+            for line in lines:
+                if self.page_number_pattern.match(line):
+                    page_number_count += 1
+                elif line.rstrip().isdigit() and len(line) < 5:
+                    page_number_count += 1
+
+            # 如果超过30%的行是页码，判定为目录
+            if page_number_count / len(lines) > 0.3:
+                return True
+
+        return False
+
+    def is_low_density(self, text: str) -> bool:
+        """检查是否为低密度内容"""
+        # 去除上下文前缀后的内容
+        content = text
+        if "【背景:" in content:
+            content = content.split("】", 1)[-1] if "】" in content else content
+
+        content = content.strip()
+
+        # 过短
+        if len(content) < 50:
+            # 检查是否包含标点符号（中文和英文）
+            has_punctuation = any(c in content for c in '。，！？；：、,.!?;:')
+            if not has_punctuation:
+                return True
+
+        # 仅包含图片链接
+        if content.startswith("![image](") and len(content) < 200:
+            # 检查是否只有图片链接
+            remaining = content.replace("![image](", "").replace(")", "")
+            remaining = remaining.replace("http://", "").replace("https://", "")
+            if len(remaining.strip()) < 50:  # 只有URL没有描述
+                return True
+
+        return False
+
+    def is_copyright_or_meta(self, text: str) -> bool:
+        """检查是否为版权或元数据"""
+        # 检查版权符号模式
+        copyright_patterns = [
+            r'©\s*\d{4}',
+            r'著作权合同',
+            r'ISBN\s*\d',
+            r'书名原文',
+            r'译者.*主编',
+        ]
+
+        for pattern in copyright_patterns:
+            if re.search(pattern, text):
+                return True
+        return False
+
+    def clean_noise_symbols(self, text: str) -> str:
+        """清理噪音符号"""
+        # 移除 $\textcircled{9}$ 类型的符号
+        text = self.noise_pattern.sub('', text)
+        # 移除多余的空行
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        return text.strip()
+
+    def should_keep(self, doc: Document) -> bool:
+        """判断是否保留该文档"""
+        content = doc.page_content
+        h1 = doc.metadata.get('h1', '')
+        h2 = doc.metadata.get('h2', '')
+
+        # 规则1: 标题黑名单
+        if self.is_blacklisted_by_title(h1, h2):
+            return False
+
+        # 规则2: 关键词黑名单
+        if self.is_blacklisted_by_keyword(content):
+            return False
+
+        # 规则3: 目录检测
+        if self.is_table_of_contents(content):
+            return False
+
+        # 规则4: 低密度内容
+        if self.is_low_density(content):
+            return False
+
+        # 规则5: 版权/元数据
+        if self.is_copyright_or_meta(content):
+            return False
+
+        return True
+
+    def filter_documents(self, documents: List[Document]) -> List[Document]:
+        """过滤文档列表"""
+        filtered_docs = []
+        dropped_count = 0
+        drop_reasons = {
+            "title_blacklist": 0,
+            "keyword_blacklist": 0,
+            "table_of_contents": 0,
+            "low_density": 0,
+            "copyright_meta": 0,
+        }
+
+        for doc in tqdm(documents, desc="过滤噪音"):
+            content = doc.page_content
+            h1 = doc.metadata.get('h1', '')
+            h2 = doc.metadata.get('h2', '')
+
+            # 检查过滤原因并记录
+            if self.is_blacklisted_by_title(h1, h2):
+                drop_reasons["title_blacklist"] += 1
+                dropped_count += 1
+                continue
+
+            if self.is_blacklisted_by_keyword(content):
+                drop_reasons["keyword_blacklist"] += 1
+                dropped_count += 1
+                continue
+
+            if self.is_table_of_contents(content):
+                drop_reasons["table_of_contents"] += 1
+                dropped_count += 1
+                continue
+
+            if self.is_low_density(content):
+                drop_reasons["low_density"] += 1
+                dropped_count += 1
+                continue
+
+            if self.is_copyright_or_meta(content):
+                drop_reasons["copyright_meta"] += 1
+                dropped_count += 1
+                continue
+
+            # 清理噪音符号
+            doc.page_content = self.clean_noise_symbols(content)
+            filtered_docs.append(doc)
+
+        # 打印过滤统计
+        print(f"\n{'='*60}")
+        print(f"过滤统计:")
+        print(f"  原始文档数: {len(documents)}")
+        print(f"  过滤掉: {dropped_count} 个垃圾chunk")
+        print(f"  保留: {len(filtered_docs)} 个有效chunk")
+        print(f"\n过滤原因分布:")
+        for reason, count in drop_reasons.items():
+            if count > 0:
+                print(f"  - {reason}: {count}")
+        print(f"{'='*60}\n")
+
+        return filtered_docs
+
 
 class MarkdownRAGIngestor:
     """Markdown文档RAG数据摄入器"""
@@ -472,7 +737,8 @@ class MarkdownRAGIngestor:
         self,
         file_path: str,
         source_tag: str,
-        page_range: str
+        page_range: str,
+        apply_filter: bool = True
     ) -> List[Document]:
         """
         处理单个文件的完整流程
@@ -481,6 +747,7 @@ class MarkdownRAGIngestor:
             file_path: 文件路径
             source_tag: 源文件标签（part1或part2）
             page_range: 页码范围
+            apply_filter: 是否应用噪音过滤
 
         Returns:
             处理后的文档列表
@@ -500,6 +767,14 @@ class MarkdownRAGIngestor:
 
         # 步骤4: 二次切分
         docs = self.split_large_chunks(docs)
+
+        # 步骤5: 噪音过滤
+        if apply_filter:
+            chunk_filter = ChunkFilter()
+            docs_before_filter = len(docs)
+            docs = chunk_filter.filter_documents(docs)
+            docs_after_filter = len(docs)
+            print(f"过滤后: {docs_after_filter} 个有效chunk (过滤掉 {docs_before_filter - docs_after_filter} 个)")
 
         print(f"\n处理完成! 最终得到 {len(docs)} 个文档块")
 
