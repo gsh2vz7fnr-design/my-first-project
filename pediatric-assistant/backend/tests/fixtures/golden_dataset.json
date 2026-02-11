@@ -1,0 +1,96 @@
+{
+  "description": "RAG 检索准确性测试金标准数据集",
+  "version": "1.0.0",
+  "test_cases": [
+    {
+      "id": "TC001",
+      "description": "婴儿发烧咨询",
+      "query": "宝宝8个月发烧39度怎么办",
+      "expected_keywords": ["发烧", "体温", "退烧", "物理降温"],
+      "expected_source_ids": [],
+      "min_score": 0.5,
+      "expected_category": null
+    },
+    {
+      "id": "TC002",
+      "description": "新生儿大便咨询",
+      "query": "新生儿一天拉几次大便是正常的",
+      "expected_keywords": ["大便", "排便", "母乳", "次数"],
+      "expected_source_ids": [],
+      "min_score": 0.4,
+      "expected_category": null
+    },
+    {
+      "id": "TC003",
+      "description": "儿童误吞异物急救",
+      "query": "宝宝吞了异物怎么办",
+      "expected_keywords": ["异物", "吞", "窒息"],
+      "expected_source_ids": [],
+      "min_score": 0.3,
+      "expected_category": null
+    },
+    {
+      "id": "TC004",
+      "description": "腹泻护理咨询",
+      "query": "宝宝拉肚子水样便怎么办",
+      "expected_keywords": ["腹泻", "拉肚子", "水样", "脱水"],
+      "expected_source_ids": [],
+      "min_score": 0.5,
+      "expected_category": null
+    },
+    {
+      "id": "TC005",
+      "description": "咳嗽护理咨询",
+      "query": "宝宝咳嗽有痰怎么护理",
+      "expected_keywords": ["咳嗽", "痰", "护理"],
+      "expected_source_ids": [],
+      "min_score": 0.4,
+      "expected_category": null
+    },
+    {
+      "id": "TC006",
+      "description": "退烧药使用咨询",
+      "query": "泰诺林和美林可以交替吃吗",
+      "expected_keywords": ["泰诺林", "美林", "退烧", "用药"],
+      "expected_source_ids": [],
+      "min_score": 0.5,
+      "expected_category": null
+    },
+    {
+      "id": "TC007",
+      "description": "摔倒头部撞击",
+      "query": "宝宝从床上摔下来头着地了",
+      "expected_keywords": ["摔倒", "头部", "观察", "呕吐"],
+      "expected_source_ids": [],
+      "min_score": 0.4,
+      "expected_category": null
+    },
+    {
+      "id": "TC008",
+      "description": "皮疹咨询",
+      "query": "宝宝身上起红疹子是怎么回事",
+      "expected_keywords": ["皮疹", "红疹", "湿疹"],
+      "expected_source_ids": [],
+      "min_score": 0.35,
+      "expected_category": null
+    },
+    {
+      "id": "TC009",
+      "description": "呕吐护理",
+      "query": "宝宝吃完奶就吐怎么办",
+      "expected_keywords": ["呕吐", "吐奶", "护理"],
+      "expected_source_ids": [],
+      "min_score": 0.4,
+      "expected_category": null
+    },
+    {
+      "id": "TC010",
+      "description": "高热惊厥",
+      "query": "宝宝发烧抽搐了怎么办",
+      "expected_keywords": ["惊厥", "抽搐", "发烧", "急救"],
+      "expected_source_ids": [],
+      "min_score": 0.5,
+      "expected_category": null
+    }
+  ]
+}

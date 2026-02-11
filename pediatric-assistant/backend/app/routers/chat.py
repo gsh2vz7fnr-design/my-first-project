@@ -14,7 +14,7 @@ from app.services.llm_service import llm_service
 from app.services.triage_engine import triage_engine
 from app.services.safety_filter import safety_filter
 from app.services.stream_filter import StreamSafetyFilter
-from app.services.rag_service import rag_service
+from app.services.rag_service import get_rag_service
 from app.config import settings
 from app.services.profile_service import profile_service
 from app.services.conversation_service import conversation_service
@@ -253,7 +253,7 @@ async def send_message(request: ChatRequest):
         # 检测情绪并添加情绪承接
         emotion_support = llm_service.detect_emotion(request.message)
 
-        rag_result = await rag_service.generate_answer_with_sources(
+        rag_result = await get_rag().generate_answer_with_sources(
             query=request.message,
             context=context
         )
@@ -296,7 +296,7 @@ async def send_message(request: ChatRequest):
         )
 
         # 添加来源元数据
-        sources_metadata = rag_service.get_sources_metadata(rag_result.sources)
+        sources_metadata = get_rag().get_sources_metadata(rag_result.sources)
         return {
             "code": 0,
             "data": {
@@ -623,7 +623,7 @@ async def send_message_stream(request: ChatRequest):
 
             # Send metadata
             # 添加来源元数据
-            sources_metadata = rag_service.get_sources_metadata(rag_result.sources)
+            sources_metadata = get_rag().get_sources_metadata(rag_result.sources)
             metadata_chunk = StreamChunk(
                 type="metadata",
                 metadata={
@@ -724,7 +724,7 @@ async def get_source_snippet(entry_id: str):
         dict: 原文片段
     """
     try:
-        entry = rag_service.get_entry_by_id(entry_id)
+        entry = get_rag().get_entry_by_id(entry_id)
         if not entry:
             raise HTTPException(status_code=404, detail="来源未找到")
 
@@ -742,6 +742,20 @@ async def get_source_snippet(entry_id: str):
     except Exception as e:
         logger.error(f"获取来源失败: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============ RAG Service ============
+
+# 延迟获取 RAG 服务实例
+_rag_service = None
+
+
+def get_rag():
+    """获取 RAG 服务单例"""
+    global _rag_service
+    if _rag_service is None:
+        _rag_service = get_rag_service()
+    return _rag_service
 
 
 # ============ Helper Functions ============

@@ -149,23 +149,45 @@ function formatMessage(text) {
   // 先清理来源标记
   let clean = text.replace(/【来源:[^】]+】/g, "");
 
+  // 提取代码块，用占位符替换（避免内部被转义）
+  const codeBlocks = [];
+  clean = clean.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
+    const idx = codeBlocks.length;
+    codeBlocks.push({ lang, code: code.trim() });
+    return `\n__CODE_BLOCK_${idx}__\n`;
+  });
+
   // 转义 HTML
   let html = escapeHtml(clean);
 
   // 处理 Markdown 格式
-  // 1. 处理标题 h3 (### 开头)
+  // 1. 标题 (### / ## / #)
+  html = html.replace(/^#### (.+)$/gm, "<h4>$1</h4>");
   html = html.replace(/^### (.+)$/gm, "<h3>$1</h3>");
+  html = html.replace(/^## (.+)$/gm, "<h2>$1</h2>");
 
-  // 2. 处理加粗 **text**
+  // 2. 加粗 **text**
   html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
 
-  // 3. 处理引用块 > text（注意 > 已被转义为 &gt;）
+  // 3. 斜体 *text* (不匹配已处理的加粗)
+  html = html.replace(/(?<!\*)\*([^*]+?)\*(?!\*)/g, "<em>$1</em>");
+
+  // 4. 行内代码 `code`
+  html = html.replace(/`([^`]+?)`/g, "<code class='inline-code'>$1</code>");
+
+  // 5. 链接 [text](url)
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g,
+    '<a href="$2" target="_blank" rel="noopener noreferrer" class="md-link">$1</a>');
+
+  // 6. 引用块 > text（注意 > 已被转义为 &gt;）
   html = html.replace(/^&gt; (.*?)$/gm, "<blockquote>$1</blockquote>");
-  html = html.replace(/^&gt;\s*$/gm, ""); // 空引用行
-  // 合并连续的引用块
+  html = html.replace(/^&gt;\s*$/gm, "");
   html = html.replace(/<\/blockquote>\n<blockquote>/g, "<br>");
 
-  // 4. 处理列表和段落（逐行解析）
+  // 7. 水平线
+  html = html.replace(/^---+$/gm, "<hr>");
+
+  // 8. 处理列表和段落（逐行解析）
   const lines = html.split("\n");
   let result = [];
   let inUl = false;
@@ -174,11 +196,22 @@ function formatMessage(text) {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
-    // 跳过已经是 HTML 标签的行（h3, blockquote）
-    if (line.startsWith("<h3>") || line.startsWith("<blockquote>")) {
+    // 跳过已经是 HTML 标签的行
+    if (line.startsWith("<h") || line.startsWith("<blockquote>") || line.startsWith("<hr")) {
       if (inUl) { result.push("</ul>"); inUl = false; }
       if (inOl) { result.push("</ol>"); inOl = false; }
       result.push(line);
+      continue;
+    }
+
+    // 代码块占位符还原
+    const codeMatch = line.trim().match(/^__CODE_BLOCK_(\d+)__$/);
+    if (codeMatch) {
+      if (inUl) { result.push("</ul>"); inUl = false; }
+      if (inOl) { result.push("</ol>"); inOl = false; }
+      const block = codeBlocks[parseInt(codeMatch[1])];
+      const langClass = block.lang ? ` class="lang-${block.lang}"` : "";
+      result.push(`<pre class="code-block"><code${langClass}>${escapeHtml(block.code)}</code></pre>`);
       continue;
     }
 
@@ -464,6 +497,38 @@ async function fetchSource(entryId) {
 }
 
 /**
+ * Create a "thinking" loading bubble
+ * @returns {Object} - Element and remove method
+ */
+function createThinkingBubble() {
+  const section = document.createElement("section");
+  section.className = "message assistant";
+
+  const bubble = document.createElement("div");
+  bubble.className = "bubble bubble-thinking";
+  bubble.innerHTML = `
+    <div class="thinking-indicator">
+      <div class="thinking-dots">
+        <span class="thinking-dot"></span>
+        <span class="thinking-dot"></span>
+        <span class="thinking-dot"></span>
+      </div>
+      <span class="thinking-text">正在分析中...</span>
+    </div>
+  `;
+
+  section.appendChild(bubble);
+
+  return {
+    element: section,
+    remove() {
+      section.classList.add("thinking-exit");
+      setTimeout(() => section.remove(), 200);
+    },
+  };
+}
+
+/**
  * Send message with streaming output
  * @param {string} text - User message
  * @param {number} retryCount - Current retry attempt
@@ -475,6 +540,33 @@ async function sendMessageStream(text, retryCount = 0) {
   let streamBubble = null;
   let metadata = null;
   let streamDone = false;
+  let accumulatedText = ""; // 累积原始文本，用于实时格式化
+  let formatTimer = null;   // 防抖定时器
+
+  // 显示 "思考中" 气泡
+  const thinkingBubble = createThinkingBubble();
+  const empty = chat.querySelector(".chat-empty");
+  if (empty) empty.remove();
+  chat.appendChild(thinkingBubble.element);
+  chat.scrollTop = chat.scrollHeight;
+
+  // 实时格式化函数（防抖，避免频繁重渲染）
+  function scheduleFormat() {
+    if (formatTimer) clearTimeout(formatTimer);
+    formatTimer = setTimeout(() => {
+      if (streamBubble && accumulatedText) {
+        const formatted = formatMessage(accumulatedText);
+        streamBubble.bubble.innerHTML = formatted;
+        // 重新添加光标
+        const cursor = document.createElement("span");
+        cursor.className = "stream-cursor";
+        cursor.textContent = "▋";
+        streamBubble.bubble.appendChild(cursor);
+        streamBubble.cursor = cursor;
+        chat.scrollTop = chat.scrollHeight;
+      }
+    }, 80);
+  }
 
   try {
     const response = await fetch(`${API_BASE}/api/v1/chat/stream`, {
@@ -488,13 +580,8 @@ async function sendMessageStream(text, retryCount = 0) {
     });
 
     if (!response.ok) {
+      thinkingBubble.remove();
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-    }
-
-    // Remove empty state
-    const empty = chat.querySelector(".chat-empty");
-    if (empty) {
-      empty.remove();
     }
 
     // Read the stream
@@ -554,14 +641,13 @@ async function sendMessageStream(text, retryCount = 0) {
                 clearComposerProgress();
 
                 // 1. Prepare data for Slot Tracker
-                // We assume the first missing slot is "Current", others are "Waiting"
                 const slotKeys = Object.keys(metadata.missing_slots);
                 const slotsData = slotKeys.map((key, index) => {
                   const slotDef = metadata.missing_slots[key];
                   return {
                     label: slotDef.label || key,
                     status: index === 0 ? "current" : "waiting",
-                    value: null // Value is missing
+                    value: null
                   };
                 });
 
@@ -572,13 +658,11 @@ async function sendMessageStream(text, retryCount = 0) {
                 // 3. Create Quick Replies for the CURRENT slot (first one)
                 const currentSlotKey = slotKeys[0];
                 const currentSlotLabel = metadata.missing_slots[currentSlotKey].label || currentSlotKey;
-                
-                // Try to find chips in map by key or label
+
                 const chips = QUICK_REPLIES_MAP[currentSlotKey] || QUICK_REPLIES_MAP[currentSlotLabel];
-                
+
                 if (chips && chips.length > 0) {
                   activeQuickReplies = createQuickReplies(chips, (value) => {
-                    // Send message when chip is clicked
                     composer.refs.input.value = value;
                     sendMessage();
                   });
@@ -588,9 +672,8 @@ async function sendMessageStream(text, retryCount = 0) {
                 // 4. Update Input Placeholder
                 composer.refs.input.placeholder = `请描述${currentSlotLabel}...`;
 
-                // 5. Create inline form fields (as requested: below dialogue)
+                // 5. Create inline form fields
                 const form = createFollowUpForm(metadata.missing_slots, (values) => {
-                  // Send form data as a follow-up message
                   const followUpMessage = Object.entries(values)
                     .map(([key, value]) => {
                       if (Array.isArray(value)) {
@@ -602,11 +685,7 @@ async function sendMessageStream(text, retryCount = 0) {
 
                   appendMessage("user", followUpMessage);
                   form.element.remove();
-                  
-                  // Clear progress bar
                   clearComposerProgress();
-
-                  // Send the follow-up data to backend
                   sendMessageStream(followUpMessage);
                 });
 
@@ -626,6 +705,9 @@ async function sendMessageStream(text, retryCount = 0) {
               if (parseFloat(latency) > 1.5) {
                 console.warn(`⚠️ First-token latency exceeded 1.5s target`);
               }
+
+              // 移除 thinking 气泡，创建 stream 气泡
+              thinkingBubble.remove();
             }
 
             // Handle content chunks
@@ -636,16 +718,19 @@ async function sendMessageStream(text, retryCount = 0) {
                 chat.appendChild(streamBubble.element);
               }
 
+              accumulatedText += data.content;
               streamBubble.appendText(data.content);
               chat.scrollTop = chat.scrollHeight;
+
+              // 触发实时格式化（防抖）
+              scheduleFormat();
             } else if (data.type === "abort" && data.content) {
-              // Handle safety abort
+              thinkingBubble.remove();
               if (streamBubble) {
                 streamBubble.bubble.classList.add("stream-error");
                 streamBubble.bubble.innerHTML = formatMessage(data.content);
                 streamBubble.cursor.remove();
               } else {
-                // Create error bubble if stream hasn't started
                 const errorBubble = createStreamBubble({ role: "assistant", initialText: "" });
                 errorBubble.bubble.classList.add("stream-error");
                 errorBubble.bubble.innerHTML = formatMessage(data.content);
@@ -654,15 +739,18 @@ async function sendMessageStream(text, retryCount = 0) {
               }
               showBanner("⚠️ 安全警示：该回复已被系统拦截。", "warn");
             } else if (data.type === "done") {
-              // Complete streaming
-              streamDone = true;
-              if (streamBubble) {
-                // 获取完整文本并格式化（去掉光标字符）
-                const fullText = streamBubble.bubble.textContent.replace(/▋/g, "").trim();
-                const formattedHTML = formatMessage(fullText);
+              // 清除防抖定时器
+              if (formatTimer) clearTimeout(formatTimer);
 
-                // 更新 bubble 内容（移除 cursor 后设置格式化的 HTML）
-                streamBubble.cursor.remove();
+              streamDone = true;
+              thinkingBubble.remove();
+
+              if (streamBubble) {
+                // 最终格式化
+                const formattedHTML = formatMessage(accumulatedText);
+                if (streamBubble.cursor && streamBubble.cursor.parentNode) {
+                  streamBubble.cursor.remove();
+                }
                 streamBubble.bubble.innerHTML = formattedHTML;
                 streamBubble.bubble.classList.remove("bubble-stream");
 
@@ -671,7 +759,7 @@ async function sendMessageStream(text, retryCount = 0) {
                   const triageCard = createTriageResultCard({
                     level: metadata.triage_level,
                     reason: "根据症状分析",
-                    action: fullText,
+                    action: accumulatedText,
                   });
                   streamBubble.bubble.innerHTML = "";
                   streamBubble.bubble.appendChild(triageCard);
@@ -682,9 +770,10 @@ async function sendMessageStream(text, retryCount = 0) {
                   const sourceToggle = createSourceToggle(metadata.sources);
                   streamBubble.bubble.appendChild(sourceToggle);
                 }
+
+                chat.scrollTop = chat.scrollHeight;
               }
 
-              // Check if overall latency was acceptable
               if (firstTokenTime) {
                 const totalLatency = ((performance.now() - startTime) / 1000).toFixed(2);
                 console.log(`✅ Streaming complete in ${totalLatency}s`);
@@ -698,12 +787,15 @@ async function sendMessageStream(text, retryCount = 0) {
     }
 
     // Clean up (only if "done" event was NOT already processed)
+    if (formatTimer) clearTimeout(formatTimer);
+    thinkingBubble.remove();
+
     if (streamBubble && !streamDone) {
-      // 格式化并完成（去掉光标字符）
-      const fullText = streamBubble.bubble.textContent.replace(/▋/g, "").trim();
-      if (fullText) {
-        const formattedHTML = formatMessage(fullText);
-        streamBubble.cursor.remove();
+      if (accumulatedText) {
+        const formattedHTML = formatMessage(accumulatedText);
+        if (streamBubble.cursor && streamBubble.cursor.parentNode) {
+          streamBubble.cursor.remove();
+        }
         streamBubble.bubble.innerHTML = formattedHTML;
         streamBubble.bubble.classList.remove("bubble-stream");
       } else {
@@ -716,6 +808,8 @@ async function sendMessageStream(text, retryCount = 0) {
 
   } catch (err) {
     console.error("Streaming error:", err);
+    if (formatTimer) clearTimeout(formatTimer);
+    thinkingBubble.remove();
 
     // Retry logic
     if (retryCount < MAX_RETRIES) {
@@ -759,10 +853,18 @@ async function sendMessage() {
   hideBanner();
   appendMessage("user", text);
   composer.refs.input.value = "";
-  composer.refs.input.focus();
 
-  // Use streaming for better user experience
-  await sendMessageStream(text);
+  // 禁用输入，防止重复发送
+  composer.refs.button.disabled = true;
+  composer.refs.input.disabled = true;
+
+  try {
+    await sendMessageStream(text);
+  } finally {
+    composer.refs.button.disabled = false;
+    composer.refs.input.disabled = false;
+    composer.refs.input.focus();
+  }
 }
 
 composer.refs.button.addEventListener("click", sendMessage);

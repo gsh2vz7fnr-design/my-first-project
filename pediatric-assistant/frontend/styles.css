@@ -516,6 +516,20 @@ body {
  * Markdown Content Styling (Notion-like)
  * ======================================== */
 
+.bubble h2 {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 18px 0 10px 0;
+  padding-bottom: 6px;
+  border-bottom: 2px solid var(--primary-100);
+  line-height: 1.4;
+}
+
+.bubble h2:first-child {
+  margin-top: 0;
+}
+
 .bubble h3 {
   font-size: 15px;
   font-weight: 700;
@@ -527,6 +541,18 @@ body {
 }
 
 .bubble h3:first-child {
+  margin-top: 0;
+}
+
+.bubble h4 {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 14px 0 6px 0;
+  line-height: 1.4;
+}
+
+.bubble h4:first-child {
   margin-top: 0;
 }
 
@@ -544,10 +570,16 @@ body {
   margin-bottom: 0;
 }
 
-/* Remove margin between h3 and the immediately following element */
+/* Remove margin between headings and the immediately following element */
+.bubble h2 + p,
+.bubble h2 + ul,
+.bubble h2 + ol,
 .bubble h3 + p,
 .bubble h3 + ul,
-.bubble h3 + ol {
+.bubble h3 + ol,
+.bubble h4 + p,
+.bubble h4 + ul,
+.bubble h4 + ol {
   margin-top: 4px;
 }
 
@@ -557,6 +589,15 @@ body {
 }
 
 .message.user .bubble strong {
+  color: inherit;
+}
+
+.bubble em {
+  font-style: italic;
+  color: var(--text-secondary);
+}
+
+.message.user .bubble em {
   color: inherit;
 }
 
@@ -575,13 +616,84 @@ body {
   color: var(--emergency-700);
 }
 
+.bubble hr {
+  border: none;
+  border-top: 1px solid var(--border-light);
+  margin: 12px 0;
+}
+
+/* Links */
+.bubble .md-link {
+  color: var(--primary-500);
+  text-decoration: none;
+  border-bottom: 1px solid var(--primary-200);
+  transition: all var(--duration-fast) var(--easing-default);
+  font-weight: 500;
+}
+
+.bubble .md-link:hover {
+  color: var(--primary-600);
+  border-bottom-color: var(--primary-400);
+  background: var(--primary-50);
+  border-radius: 2px;
+  padding: 0 2px;
+  margin: 0 -2px;
+}
+
+.message.user .bubble .md-link {
+  color: var(--text-inverse);
+  border-bottom-color: rgba(255, 255, 255, 0.5);
+}
+
+/* Inline Code */
+.bubble .inline-code {
+  background: var(--bg-hover);
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-family: 'SF Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
+  font-size: 13px;
+  color: var(--primary-600);
+  white-space: nowrap;
+}
+
+.message.user .bubble .inline-code {
+  background: rgba(255, 255, 255, 0.15);
+  border-color: rgba(255, 255, 255, 0.2);
+  color: var(--text-inverse);
+}
+
+/* Code Blocks */
+.bubble .code-block {
+  margin: 12px 0;
+  padding: 14px 16px;
+  background: #1e1e2e;
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+  font-family: 'SF Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #cdd6f4;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.bubble .code-block code {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: inherit;
+  color: inherit;
+  white-space: pre;
+}
+
+/* Lists */
 .bubble .message-list {
   margin: 8px 0;
   padding-left: 20px;
 }
 
 .bubble .message-list li {
-  margin: 6px 0;
+  margin: 8px 0;
   line-height: 1.7;
   color: var(--text-primary);
   font-size: 14px;
@@ -981,6 +1093,92 @@ body {
   border-color: var(--emergency-300);
   background: var(--emergency-50);
   color: var(--emergency-700);
+}
+
+/* ========================================
+ * Thinking Bubble (思考中动画)
+ * ======================================== */
+
+.bubble-thinking {
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  padding: var(--space-3) var(--space-4);
+  animation: thinkingFadeIn 0.3s ease;
+}
+
+@keyframes thinkingFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.thinking-exit {
+  animation: thinkingFadeOut 0.2s ease forwards;
+}
+
+@keyframes thinkingFadeOut {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+.thinking-indicator {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.thinking-dots {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.thinking-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--primary-300);
+  animation: thinkingBounce 1.4s ease-in-out infinite;
+}
+
+.thinking-dot:nth-child(1) {
+  animation-delay: 0s;
+}
+
+.thinking-dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.thinking-dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes thinkingBounce {
+  0%, 60%, 100% {
+    transform: translateY(0);
+    opacity: 0.4;
+  }
+  30% {
+    transform: translateY(-6px);
+    opacity: 1;
+  }
+}
+
+.thinking-text {
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-weight: 500;
 }
 
 /* ========================================

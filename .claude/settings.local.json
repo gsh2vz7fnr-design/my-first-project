@@ -79,7 +79,14 @@
       "Bash(./venv/bin/pip:*)",
       "Bash(PYTHONPATH=/Users/zhang/Desktop/Claude/pediatric-assistant/backend python3 -m uvicorn:*)",
       "Bash(kill:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(.venv/bin/pip:*)",
+      "Bash(/Users/zhang/Desktop/Claude/pediatric-assistant/.venv/bin/pip install:*)",
+      "Bash(/Users/zhang/Desktop/Claude/pediatric-assistant/.venv/bin/python:*)",
+      "Bash(.venv/bin/python:*)",
+      "Bash(/Users/zhang/Desktop/Claude/pediatric-assistant/.venv/bin/python3:*)",
+      "Bash(/Users/zhang/Desktop/Claude/pediatric-assistant/.venv/bin/pip:*)",
+      "mcp__zai-mcp-server__analyze_image"
     ]
   }
 }

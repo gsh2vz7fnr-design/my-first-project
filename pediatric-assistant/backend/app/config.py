@@ -41,6 +41,13 @@ class Settings(BaseSettings):
     VECTOR_DB_PATH: str = str(DATA_DIR / "vector_db")
     EMBEDDING_MODEL: str = "local"  # local 或 OpenAI 兼容的embedding模型
 
+    # ChromaDB 配置
+    USE_CHROMADB: bool = True  # 是否使用 ChromaDB（False 则使用内存检索）
+    CHROMA_COLLECTION_NAME: str = "pediatric_knowledge_base"
+    CHROMA_EMBEDDING_MODEL: str = "BAAI/bge-small-zh-v1.5"  # 中文向量模型
+    CHROMA_PERSIST_DIR: Optional[str] = None  # None 表示使用默认路径（VECTOR_DB_PATH）
+    CHROMADB_SEARCH_TOP_K: int = 50  # ChromaDB 初次召回数量
+
     # 安全配置
     SECRET_KEY: str = os.getenv("SECRET_KEY", "")
     ALLOWED_ORIGINS: list = os.getenv(

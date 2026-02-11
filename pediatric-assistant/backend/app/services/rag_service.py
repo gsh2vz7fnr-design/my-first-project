@@ -1,101 +1,201 @@
 """
-RAG服务 - 知识库检索与内容溯源
+RAG服务 - 知识库检索与内容溯源（重构版）
+
+支持两种模式：
+- ChromaDB 模式：使用向量数据库进行语义检索
+- 本地模式：使用内存中的关键词检索（降级方案）
 """
 import json
 import os
-import math
 import re
 import time
 from collections import Counter
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Protocol, runtime_checkable
 from loguru import logger
 from openai import OpenAI
 
 from app.config import settings
 from app.models.user import KnowledgeSource, RAGResult
+from app.services.vector_store import (
+    VectorStore,
+    ChromaStore,
+    SearchResult,
+    HybridEmbeddingService,
+    SiliconFlowEmbedding,
+    LocalEmbedding
+)
+
+
+@runtime_checkable
+class EmbeddingServiceProtocol(Protocol):
+    """Embedding 服务协议"""
+
+    @property
+    def is_available(self) -> bool:
+        ...
+
+    async def embed(self, text: str) -> Optional[List[float]]:
+        ...
 
 
 class RAGService:
-    """RAG检索服务"""
+    """
+    RAG检索服务（重构版）
 
-    def __init__(self):
-        """初始化"""
+    Features:
+        - 依赖注入 VectorStore 和 EmbeddingService
+        - ChromaDB 向量检索 + 本地降级
+        - 混合检索策略
+        - 重排序优化
+
+    Example:
+        >>> vector_store = ChromaStore()
+        >>> embedding_service = HybridEmbeddingService()
+        >>> rag_service = RAGService(vector_store, embedding_service)
+        >>> results = await rag_service.retrieve("宝宝发烧怎么办")
+    """
+
+    def __init__(
+        self,
+        vector_store: Optional[VectorStore] = None,
+        embedding_service: Optional[EmbeddingServiceProtocol] = None,
+        use_chromadb: Optional[bool] = None
+    ):
+        """
+        初始化 RAG 服务
+
+        Args:
+            vector_store: 向量存储实例（可选，默认自动创建）
+            embedding_service: Embedding 服务实例（可选）
+            use_chromadb: 是否使用 ChromaDB（可选，默认使用配置）
+        """
+        # 确定是否使用 ChromaDB
+        self._use_chromadb = use_chromadb if use_chromadb is not None else settings.USE_CHROMADB
+
+        # LLM 客户端
         self.client = OpenAI(
             api_key=settings.DEEPSEEK_API_KEY,
             base_url=settings.DEEPSEEK_BASE_URL
         )
         self.chat_model = settings.DEEPSEEK_MODEL
-        self.embedding_model = settings.EMBEDDING_MODEL
+
+        # 向量存储
+        self._vector_store = vector_store
+
+        # Embedding 服务
+        self._embedding_service = embedding_service
+
+        # 本地降级：始终加载 JSON 知识库作为 fallback
+        # 当 ChromaDB 不可用时自动使用本地检索
         self.knowledge_base = self._load_knowledge_base()
-        self.embeddings_cache = {}
+        self._doc_token_counts: List[Counter] = []
+
+        # 状态控制
         self._api_key_configured = bool(settings.DEEPSEEK_API_KEY)
         self._remote_cooldown_until: float = 0.0
-        self._doc_token_counts: List[Counter] = []
-        self._build_local_index()
+        self._chromadb_available: Optional[bool] = None
+
+        # 构建本地索引（用于降级）
+        if self.knowledge_base:
+            self._build_local_index()
+
+        logger.info(
+            f"RAGService 初始化完成: use_chromadb={self._use_chromadb}, "
+            f"kb_size={len(self.knowledge_base)}"
+        )
+
+    @property
+    def vector_store(self) -> VectorStore:
+        """获取向量存储实例（延迟初始化）"""
+        if self._vector_store is None:
+            from app.services.vector_store import VectorStoreFactory
+            self._vector_store = VectorStoreFactory.create_chroma()
+        return self._vector_store
+
+    @property
+    def embedding_service(self) -> EmbeddingServiceProtocol:
+        """获取 Embedding 服务实例（延迟初始化）"""
+        if self._embedding_service is None:
+            remote = SiliconFlowEmbedding()
+            local = LocalEmbedding()
+            self._embedding_service = HybridEmbeddingService(remote, local)
+        return self._embedding_service
 
     @property
     def remote_available(self) -> bool:
+        """检查远程 LLM 是否可用"""
         if not self._api_key_configured:
             return False
         return time.time() >= self._remote_cooldown_until
 
     @remote_available.setter
     def remote_available(self, value: bool):
+        """设置远程可用状态"""
         if not value:
-            self._remote_cooldown_until = time.time() + 60  # 60秒冷却
+            self._remote_cooldown_until = time.time() + 60
         else:
             self._remote_cooldown_until = 0.0
 
+    async def _check_chromadb_available(self) -> bool:
+        """
+        检查 ChromaDB 是否可用
+
+        Returns:
+            bool: 可用返回 True
+        """
+        if self._chromadb_available is not None:
+            return self._chromadb_available
+
+        if not self._use_chromadb:
+            self._chromadb_available = False
+            return False
+
+        try:
+            store = self.vector_store
+            if hasattr(store, '_ensure_initialized'):
+                await store._ensure_initialized()
+
+            count = store.count
+            self._chromadb_available = count > 0
+
+            if self._chromadb_available:
+                logger.info(f"ChromaDB 可用，文档数: {count}")
+            else:
+                logger.warning("ChromaDB 集合为空，将使用本地检索")
+
+            return self._chromadb_available
+
+        except Exception as e:
+            logger.error(f"ChromaDB 不可用: {e}", exc_info=True)
+            self._chromadb_available = False
+            return False
+
     def _load_knowledge_base(self) -> List[Dict[str, Any]]:
-        """加载知识库"""
+        """加载本地 JSON 知识库（用于降级）"""
         knowledge_base = []
         kb_path = settings.KNOWLEDGE_BASE_PATH
 
         try:
-            # 遍历知识库目录下的所有JSON文件
+            if not os.path.exists(kb_path):
+                logger.warning(f"知识库路径不存在: {kb_path}")
+                return []
+
             for filename in os.listdir(kb_path):
                 if filename.endswith('.json'):
                     filepath = os.path.join(kb_path, filename)
                     with open(filepath, 'r', encoding='utf-8') as f:
                         data = json.load(f)
-                        # 展开entries
                         for entry in data.get('entries', []):
                             entry['topic'] = data.get('topic')
                             entry['category'] = data.get('category')
                             knowledge_base.append(entry)
 
-            logger.info(f"加载知识库完成，共 {len(knowledge_base)} 条记录")
+            logger.info(f"加载本地知识库完成，共 {len(knowledge_base)} 条记录")
             return knowledge_base
 
         except Exception as e:
             logger.error(f"加载知识库失败: {e}", exc_info=True)
             return []
-
-    async def get_embedding(self, text: str) -> Optional[List[float]]:
-        """
-        获取文本的向量表示
-
-        Args:
-            text: 文本
-
-        Returns:
-            Optional[List[float]]: 向量
-        """
-        # 检查缓存
-        if text in self.embeddings_cache:
-            return self.embeddings_cache[text]
-
-        try:
-            response = self.client.embeddings.create(
-                model=self.embedding_model,
-                input=text
-            )
-            embedding = response.data[0].embedding
-            self.embeddings_cache[text] = embedding
-            return embedding
-        except Exception as e:
-            logger.error(f"获取embedding异常: {e}", exc_info=True)
-            return None
 
     async def retrieve(
         self,
@@ -104,74 +204,123 @@ class RAGService:
         filters: Optional[Dict[str, Any]] = None
     ) -> List[KnowledgeSource]:
         """
-        检索相关知识（混合检索 + 重排序）
-        
+        检索相关知识
+
         Args:
             query: 查询文本
             top_k: 返回的文档数
-            filters: 过滤条件（如age_range, category等）
-            
+            filters: 过滤条件（如age_months, category等）
+
         Returns:
             List[KnowledgeSource]: 检索结果
         """
-        if not self.knowledge_base:
-            logger.warning("知识库为空")
-            return []
+        start_time = time.time()
+        results = []
 
         try:
-            # 1. 混合检索召回 (Recall)
-            candidates = await self._hybrid_search(query, top_k=50, filters=filters)
-            
-            # 2. 重排序 (Rerank)
-            results = await self._rerank(query, candidates, top_k=top_k)
-            
-            logger.info(f"检索完成: 召回{len(candidates)}条 -> 重排序选出{len(results)}条")
+            # 检查是否使用 ChromaDB
+            if await self._check_chromadb_available():
+                # ChromaDB 向量检索
+                results = await self._retrieve_from_chromadb(query, top_k, filters)
+                retrieval_method = "chromadb"
+            else:
+                # 降级到本地检索
+                results = await self._retrieve_local(query, top_k, filters)
+                retrieval_method = "local"
+
+            elapsed = (time.time() - start_time) * 1000
+            logger.info(
+                f"检索完成: method={retrieval_method}, "
+                f"results={len(results)}, elapsed={elapsed:.1f}ms"
+            )
+
             return results
 
         except Exception as e:
             logger.error(f"检索失败: {e}", exc_info=True)
+            # 尝试降级到本地检索
+            if self.knowledge_base:
+                logger.info("尝试降级到本地检索...")
+                return await self._retrieve_local(query, top_k, filters)
             return []
 
-    async def _hybrid_search(
-        self, 
-        query: str, 
-        top_k: int = 50, 
+    async def _retrieve_from_chromadb(
+        self,
+        query: str,
+        top_k: int = 3,
         filters: Optional[Dict[str, Any]] = None
-    ) -> List[Dict[str, Any]]:
+    ) -> List[KnowledgeSource]:
         """
-        混合检索策略：语义检索 (70%) + 关键词检索 (30%)
-        """
-        # 1. 向量检索 (Semantic Search)
-        vector_candidates = []
-        if self.remote_available and self.embedding_model != "local":
-            query_embedding = await self.get_embedding(query)
-            if query_embedding:
-                for entry in self.knowledge_base:
-                    if filters and not self._match_filters(entry, filters):
-                        continue
-                        
-                    doc_text = f"{entry.get('title', '')} {entry.get('content', '')}"
-                    # 注意：这里应该缓存doc_embedding，简化起见假设已缓存或按需获取
-                    # 实际生产中应使用向量数据库
-                    doc_embedding = self.embeddings_cache.get(doc_text)
-                    if not doc_embedding:
-                        # 避免实时大量调用Embedding API，这里仅作演示
-                        # 实际应预先计算好所有文档Embedding
-                        continue
-                        
-                    similarity = self._cosine_similarity(query_embedding, doc_embedding)
-                    vector_candidates.append({
-                        "entry": entry,
-                        "vector_score": float(similarity),
-                        "keyword_score": 0.0
-                    })
+        使用 ChromaDB 进行向量检索
 
-        # 2. 关键词检索 (Keyword Search - BM25-like)
-        # 如果向量检索不可用或为了增强效果，计算关键词分数
-        keyword_candidates = []
+        Args:
+            query: 查询文本
+            top_k: 返回结果数
+            filters: 过滤条件
+
+        Returns:
+            List[KnowledgeSource]: 检索结果
+        """
+        # 1. 初次召回（从 ChromaDB 获取更多候选）
+        recall_k = min(settings.CHROMADB_SEARCH_TOP_K, 50)
+        search_results = await self.vector_store.search(
+            query=query,
+            top_k=recall_k,
+            filters=filters
+        )
+
+        if not search_results:
+            return []
+
+        # 2. 转换为候选列表
+        candidates = []
+        for result in search_results:
+            candidates.append({
+                "entry": {
+                    "id": result.metadata.get("id", ""),
+                    "content": result.content,
+                    "title": result.metadata.get("title", ""),
+                    "source": result.metadata.get("source", ""),
+                    "topic": result.metadata.get("topic", ""),
+                    "category": result.metadata.get("category", ""),
+                    "tags": result.metadata.get("tags", "").split(",") if result.metadata.get("tags") else [],
+                    "age_range": result.metadata.get("age_range", ""),
+                    "alert_level": result.metadata.get("alert_level", ""),
+                },
+                "vector_score": result.score,
+                "keyword_score": 0.0,
+                "score": result.score
+            })
+
+        # 3. 重排序
+        results = await self._rerank(query, candidates, top_k=top_k)
+
+        return results
+
+    async def _retrieve_local(
+        self,
+        query: str,
+        top_k: int = 3,
+        filters: Optional[Dict[str, Any]] = None
+    ) -> List[KnowledgeSource]:
+        """
+        本地关键词检索（降级方案）
+
+        Args:
+            query: 查询文本
+            top_k: 返回结果数
+            filters: 过滤条件
+
+        Returns:
+            List[KnowledgeSource]: 检索结果
+        """
+        if not self.knowledge_base:
+            return []
+
         query_counter = self._text_to_counter(query)
+        candidates = []
 
-        # 同义词映射：口语化表达 → 标准术语
+        # 同义词映射
         synonym_mapping = {
             "拉肚子": "腹泻", "拉稀": "腹泻",
             "发烧": "发热", "高烧": "发热",
@@ -182,158 +331,113 @@ class RAGService:
             "便秘": "大便困难"
         }
 
-        # 对查询进行同义词扩展
         expanded_query_tokens = set(query_counter.keys())
         for token in list(query_counter.keys()):
             if token in synonym_mapping:
                 expanded_query_tokens.add(synonym_mapping[token])
 
-        # 也需要反向扩展：如果文档有标准术语，查询有口语表达，应该匹配
-        reverse_synonym_mapping = {v: k for k, v in synonym_mapping.items()}
-        for token in list(query_counter.keys()):
-            if token in reverse_synonym_mapping:
-                expanded_query_tokens.add(reverse_synonym_mapping[token])
-
         for idx, entry in enumerate(self.knowledge_base):
             if filters and not self._match_filters(entry, filters):
                 continue
 
-            # 使用简单的词频重合度作为关键词分数
-            keyword_score = self._cosine_similarity_counts(query_counter, self._doc_token_counts[idx])
+            similarity = self._cosine_similarity_counts(
+                query_counter, self._doc_token_counts[idx]
+            )
 
-            # 标题匹配加权 - 双向检查
             title = entry.get("title", "")
-            # 检查标题是否在查询中
-            if title and title in query:
-                keyword_score += 0.5
-            # 检查查询关键词（含同义词）是否在标题中 - 使用子字符串匹配
-            elif title:
-                # 对于中文词汇，使用子字符串匹配更可靠
-                for query_token in expanded_query_tokens:
-                    if len(query_token) > 1 and query_token in title:
-                        keyword_score += 0.4
-                        break
-
-            # 标签匹配加权 - 同样使用子字符串匹配
             tags = entry.get("tags", [])
-            for tag in tags:
-                for query_token in expanded_query_tokens:
-                    if len(query_token) > 1 and query_token in tag:
-                        keyword_score += 0.2
-                        break
 
-            keyword_candidates.append({
+            # 标题匹配加权
+            if title and title in query:
+                similarity = max(similarity, 0.8)
+
+            # 同义词标题匹配
+            for query_token in expanded_query_tokens:
+                if len(query_token) > 1 and query_token in title:
+                    similarity = max(similarity, 0.7)
+                    break
+
+            # 标签匹配
+            if tags and any(tag in query for tag in tags):
+                similarity = max(similarity, 0.6)
+
+            candidates.append({
                 "entry": entry,
-                "keyword_score": keyword_score
+                "score": float(similarity),
+                "vector_score": 0.0,
+                "keyword_score": float(similarity)
             })
-            
-        # 3. 融合分数 (Fusion)
-        # 使用简单的加权融合: 0.7 * Vector + 0.3 * Keyword
-        # 需处理 vector_candidates 和 keyword_candidates 的合并
-        
-        # 建立 entry_id -> candidate 映射
-        merged = {}
-        
-        # 处理向量结果
-        for item in vector_candidates:
-            eid = item["entry"].get("id")
-            merged[eid] = item
-            
-        # 处理关键词结果
-        for item in keyword_candidates:
-            eid = item["entry"].get("id")
-            if eid in merged:
-                merged[eid]["keyword_score"] = item["keyword_score"]
-            else:
-                merged[eid] = {
-                    "entry": item["entry"],
-                    "vector_score": 0.0, # 未命中向量检索
-                    "keyword_score": item["keyword_score"]
-                }
-                
-        # 计算最终分数
-        final_candidates = []
-        for item in merged.values():
-            # 归一化分数 (假设分数都在 0-1 之间)
-            v_score = item.get("vector_score", 0.0)
-            k_score = item.get("keyword_score", 0.0)
-            
-            # 混合权重
-            if self.remote_available:
-                final_score = 0.7 * v_score + 0.3 * k_score
-            else:
-                final_score = k_score # 仅使用关键词
-                
-            item["score"] = final_score
-            final_candidates.append(item)
-            
-        # 排序并截取
-        final_candidates.sort(key=lambda x: x["score"], reverse=True)
-        return final_candidates[:top_k]
+
+        # 排序
+        candidates.sort(key=lambda x: x["score"], reverse=True)
+        top_candidates = candidates[:top_k * 2]  # 多取一些用于重排序
+
+        # 重排序
+        results = await self._rerank(query, top_candidates, top_k=top_k)
+
+        return results
 
     async def _rerank(
-        self, 
-        query: str, 
-        candidates: List[Dict[str, Any]], 
+        self,
+        query: str,
+        candidates: List[Dict[str, Any]],
         top_k: int = 3
     ) -> List[KnowledgeSource]:
         """
-        重排序 (Reranking)
-        模拟 Cross-Encoder 的效果，对召回结果进行精细打分
+        重排序候选结果
+
+        Args:
+            query: 查询文本
+            candidates: 候选列表
+            top_k: 返回数量
+
+        Returns:
+            List[KnowledgeSource]: 重排序后的结果
         """
-        # 由于环境限制无法运行 BGE-Reranker，使用启发式规则模拟
         reranked = []
-        
+
         for item in candidates:
-            entry = item["entry"]
-            base_score = item["score"]
+            entry = item.get("entry", {})
+            base_score = item.get("score", 0.0)
             rerank_score = base_score
-            
+
             content = entry.get("content", "")
             title = entry.get("title", "")
-            
-            # 规则1: 精确短语匹配奖励
+
+            # 规则1: 精确短语匹配
             if query in content:
                 rerank_score += 0.2
 
-            # 规则2: 关键医学实体匹配 (模拟)
-            # 比如查询包含"泰诺林"，文档标题也包含
-            if "泰诺林" in query and "泰诺林" in title:
-                rerank_score += 0.3
-            if "美林" in query and "美林" in title:
-                rerank_score += 0.3
+            # 规则2: 关键医学实体匹配
+            entity_rules = [
+                (["泰诺林"], "泰诺林"),
+                (["美林"], "美林"),
+                (["拉肚子", "拉稀", "腹泻"], "腹泻"),
+                (["发烧", "发热", "高烧"], ["发烧", "发热"]),
+                (["咳嗽", "咳"], "咳嗽"),
+                (["呕吐", "吐", "吐奶"], "呕吐"),
+                (["皮疹", "疹子", "湿疹"], "皮疹"),
+            ]
 
-            # 规则3: 同义词/口语化表达匹配奖励
-            # 如果查询包含 "拉肚子" 而文档包含 "腹泻"
-            diarrhea_keywords = ["拉肚子", "拉稀", "腹泻"]
-            if any(kw in query for kw in diarrhea_keywords) and "腹泻" in title:
-                rerank_score += 0.2
+            for query_keywords, title_keywords in entity_rules:
+                query_match = any(kw in query for kw in query_keywords)
+                if isinstance(title_keywords, list):
+                    title_match = any(kw in title for kw in title_keywords)
+                else:
+                    title_match = title_keywords in title
 
-            fever_keywords = ["发烧", "发热", "高烧"]
-            if any(kw in query for kw in fever_keywords) and any(kw in title for kw in fever_keywords):
-                rerank_score += 0.2
+                if query_match and title_match:
+                    rerank_score += 0.2
+                    break
 
-            cough_keywords = ["咳嗽", "咳"]
-            if any(kw in query for kw in cough_keywords) and "咳嗽" in title:
-                rerank_score += 0.2
-
-            vomit_keywords = ["呕吐", "吐", "吐奶"]
-            if any(kw in query for kw in vomit_keywords) and "呕吐" in title:
-                rerank_score += 0.2
-
-            rash_keywords = ["皮疹", "疹子", "湿疹"]
-            if any(kw in query for kw in rash_keywords) and "皮疹" in title:
-                rerank_score += 0.2
-                
-            # 规则3: 负向惩罚 (如果查询是"不发烧"但文档全是"发烧")
-            # (略，过于复杂)
-            
             # 阈值过滤
-            if rerank_score < settings.SIMILARITY_THRESHOLD and not self.remote_available:
-                 # 本地模式稍微放宽
-                 if rerank_score < 0.1: continue
-            elif rerank_score < settings.SIMILARITY_THRESHOLD:
-                 continue
+            threshold = settings.SIMILARITY_THRESHOLD
+            if rerank_score < threshold:
+                # 本地模式放宽阈值
+                if not self._use_chromadb and rerank_score >= 0.1:
+                    pass  # 允许通过
+                else:
+                    continue
 
             reranked.append(KnowledgeSource(
                 content=content,
@@ -349,20 +453,20 @@ class RAGService:
                     'alert_level': entry.get('alert_level'),
                     'retrieval_info': {
                         'vector_score': item.get('vector_score', 0),
-                        'keyword_score': item.get('keyword_score', 0)
+                        'keyword_score': item.get('keyword_score', 0),
+                        'rerank_score': rerank_score
                     }
                 }
             ))
-            
-        # 再次排序
+
+        # 排序并返回 top_k
         reranked.sort(key=lambda x: x.score, reverse=True)
         return reranked[:top_k]
 
     def _match_filters(self, entry: Dict[str, Any], filters: Dict[str, Any]) -> bool:
-        """检查entry是否匹配过滤条件"""
+        """检查 entry 是否匹配过滤条件"""
         for key, value in filters.items():
             if key == 'age_months':
-                # 检查年龄范围
                 age_range = entry.get('age_range', '')
                 if not self._in_age_range(value, age_range):
                     return False
@@ -377,7 +481,6 @@ class RAGService:
             return True
 
         try:
-            # 解析 "0-36个月" 格式
             if '-' in age_range_str and '个月' in age_range_str:
                 parts = age_range_str.replace('个月', '').split('-')
                 min_age = int(parts[0])
@@ -387,6 +490,53 @@ class RAGService:
             pass
 
         return True
+
+    def _build_local_index(self) -> None:
+        """构建本地检索索引"""
+        self._doc_token_counts = []
+        for entry in self.knowledge_base:
+            doc_text = f"{entry.get('title', '')} {entry.get('content', '')}"
+            self._doc_token_counts.append(self._text_to_counter(doc_text))
+
+    def _text_to_counter(self, text: str) -> Counter:
+        """将文本转换为词频计数器"""
+        text_lower = text.lower()
+
+        medical_terms = [
+            "拉肚子", "腹泻", "发烧", "发热", "咳嗽", "呕吐", "皮疹", "湿疹",
+            "惊厥", "抽搐", "呼吸困难", "昏迷", "便秘", "摔倒", "跌落", "摔伤",
+            "脱水", "补液", "嗜睡", "精神萎靡",
+            "宝宝", "婴儿", "幼儿", "儿童",
+            "小时", "分钟", "天", "周", "月", "年"
+        ]
+
+        tokens = []
+        remaining = text_lower
+
+        for term in sorted(medical_terms, key=len, reverse=True):
+            while term in remaining:
+                tokens.append(term)
+                remaining = remaining.replace(term, " ", 1)
+
+        for char in remaining:
+            if re.match(r"[a-zA-Z0-9]", char):
+                tokens.append(char)
+            elif re.match(r"[\u4e00-\u9fff]", char):
+                tokens.append(char)
+
+        return Counter(tokens)
+
+    def _cosine_similarity_counts(self, c1: Counter, c2: Counter) -> float:
+        """计算两个 Counter 的余弦相似度"""
+        if not c1 or not c2:
+            return 0.0
+        common = set(c1.keys()) & set(c2.keys())
+        dot = sum(c1[token] * c2[token] for token in common)
+        norm1 = sum(v * v for v in c1.values()) ** 0.5
+        norm2 = sum(v * v for v in c2.values()) ** 0.5
+        if norm1 == 0.0 or norm2 == 0.0:
+            return 0.0
+        return dot / (norm1 * norm2)
 
     async def generate_answer_with_sources(
         self,
@@ -408,7 +558,7 @@ class RAGService:
         if context and context.get('baby_info', {}).get('age_months'):
             filters['age_months'] = context['baby_info']['age_months']
 
-        sources = await self.retrieve(query, top_k=3, filters=filters)
+        sources = await self.retrieve(query, top_k=settings.TOP_K_RETRIEVAL, filters=filters)
 
         # 2. 如果没有检索到相关知识，返回拒答
         if not sources:
@@ -418,16 +568,15 @@ class RAGService:
                 has_source=False
             )
 
-        # 3. 构建prompt，让LLM基于检索结果生成答案
+        # 3. 构建 prompt
         prompt = self._build_rag_prompt(query, sources, context)
 
-        # 4. 生成答案（非流式）
+        # 4. 生成答案
         try:
             if not self.remote_available:
                 answer = self._build_fallback_answer(sources)
-                answer_with_citations = self.format_with_citations(answer, sources)
                 return RAGResult(
-                    answer=answer_with_citations,
+                    answer=self.format_with_citations(answer, sources),
                     sources=sources,
                     has_source=True
                 )
@@ -443,35 +592,32 @@ class RAGService:
 
             answer = response.choices[0].message.content
 
-            # 5. 添加溯源角标
-            answer_with_citations = self.format_with_citations(answer, sources)
-
             return RAGResult(
-                answer=answer_with_citations,
+                answer=self.format_with_citations(answer, sources),
                 sources=sources,
                 has_source=True
             )
+
         except Exception as e:
             logger.error(f"生成答案异常: {e}", exc_info=True)
             self.remote_available = False
             answer = self._build_fallback_answer(sources)
-            answer_with_citations = self.format_with_citations(answer, sources)
             return RAGResult(
-                answer=answer_with_citations,
+                answer=self.format_with_citations(answer, sources),
                 sources=sources,
                 has_source=True
             )
 
     def _build_fallback_answer(self, sources: List[KnowledgeSource]) -> str:
-        """本地兜底回答（无需LLM）"""
+        """构建兜底回答"""
         top = sources[0]
         entry_id = top.metadata.get("id", "unknown")
         title = top.metadata.get("title", "参考建议")
         content = top.content
 
         return (
-            f"**核心结论**：{title}【来源:{entry_id}】\n\n"
-            f"**操作建议**：\n{content}【来源:{entry_id}】\n\n"
+            f"**核心结论**：{title}\n\n"
+            f"**操作建议**：\n{content}\n\n"
             "**注意事项**：\n"
             "- 请结合宝宝实际情况观察变化\n"
             "- 如有疑问请咨询专业医生\n\n"
@@ -485,118 +631,6 @@ class RAGService:
             "- 什么情况需要就医？\n"
             "- 如何观察宝宝的恢复情况？"
         )
-    def _cosine_similarity(self, vec1: List[float], vec2: List[float]) -> float:
-        """计算余弦相似度"""
-        if not vec1 or not vec2 or len(vec1) != len(vec2):
-            return 0.0
-        dot = sum(a * b for a, b in zip(vec1, vec2))
-        norm1 = math.sqrt(sum(a * a for a in vec1))
-        norm2 = math.sqrt(sum(b * b for b in vec2))
-        if norm1 == 0.0 or norm2 == 0.0:
-            return 0.0
-        return dot / (norm1 * norm2)
-
-    def _build_local_index(self) -> None:
-        """构建本地检索索引"""
-        self._doc_token_counts = []
-        for entry in self.knowledge_base:
-            doc_text = f"{entry.get('title', '')} {entry.get('content', '')}"
-            self._doc_token_counts.append(self._text_to_counter(doc_text))
-
-    def _retrieve_local(
-        self,
-        query: str,
-        top_k: int = 3,
-        filters: Optional[Dict[str, Any]] = None
-    ) -> List[KnowledgeSource]:
-        """本地检索（不依赖外部embedding）"""
-        query_counter = self._text_to_counter(query)
-        candidates = []
-        for idx, entry in enumerate(self.knowledge_base):
-            if filters and not self._match_filters(entry, filters):
-                continue
-            similarity = self._cosine_similarity_counts(query_counter, self._doc_token_counts[idx])
-            title = entry.get("title", "")
-            tags = entry.get("tags", [])
-            if title and title in query:
-                similarity = max(similarity, 0.8)
-            if tags and any(tag in query for tag in tags):
-                similarity = max(similarity, 0.6)
-            candidates.append({
-                "entry": entry,
-                "similarity": float(similarity)
-            })
-
-        candidates.sort(key=lambda x: x["similarity"], reverse=True)
-        top_candidates = candidates[:top_k]
-
-        results = []
-        local_threshold = 0.2
-        for candidate in top_candidates:
-            if candidate["similarity"] >= local_threshold:
-                entry = candidate["entry"]
-                results.append(KnowledgeSource(
-                    content=entry.get("content", ""),
-                    source=entry.get("source", "未知来源"),
-                    score=candidate["similarity"],
-                    metadata={
-                        "id": entry.get("id"),
-                        "title": entry.get("title"),
-                        "topic": entry.get("topic"),
-                        "category": entry.get("category"),
-                        "tags": entry.get("tags", []),
-                        "age_range": entry.get("age_range"),
-                        "alert_level": entry.get("alert_level")
-                    }
-                ))
-
-        return results
-
-    def _text_to_counter(self, text: str) -> Counter:
-        """将文本转换为词频计数器，优先匹配常见医学词汇"""
-        text_lower = text.lower()
-
-        # 常见医学词汇列表（优先匹配长词）
-        medical_terms = [
-            # 症状
-            "拉肚子", "腹泻", "发烧", "发热", "咳嗽", "呕吐", "皮疹", "湿疹",
-            "惊厥", "抽搐", "呼吸困难", "昏迷", "便秘", "摔倒", "跌落", "摔伤",
-            "脱水", "补液", "嗜睡", "精神萎靡",
-            # 通用
-            "宝宝", "婴儿", "幼儿", "儿童",
-            # 时间
-            "小时", "分钟", "天", "周", "月", "年"
-        ]
-
-        tokens = []
-        remaining = text_lower
-
-        # 先匹配医学词汇
-        for term in sorted(medical_terms, key=len, reverse=True):
-            while term in remaining:
-                tokens.append(term)
-                # 替换已匹配的部分为空格，避免重复匹配
-                remaining = remaining.replace(term, " ", 1)
-
-        # 对剩余文本按单字分词
-        for char in remaining:
-            if re.match(r"[a-zA-Z0-9]", char):
-                tokens.append(char)
-            elif re.match(r"[\u4e00-\u9fff]", char):
-                tokens.append(char)
-
-        return Counter(tokens)
-
-    def _cosine_similarity_counts(self, c1: Counter, c2: Counter) -> float:
-        if not c1 or not c2:
-            return 0.0
-        common = set(c1.keys()) & set(c2.keys())
-        dot = sum(c1[token] * c2[token] for token in common)
-        norm1 = math.sqrt(sum(v * v for v in c1.values()))
-        norm2 = math.sqrt(sum(v * v for v in c2.values()))
-        if norm1 == 0.0 or norm2 == 0.0:
-            return 0.0
-        return dot / (norm1 * norm2)
 
     def _build_rag_prompt(
         self,
@@ -604,7 +638,7 @@ class RAGService:
         sources: List[KnowledgeSource],
         context: Optional[Dict[str, Any]]
     ) -> str:
-        """构建RAG提示词"""
+        """构建 RAG 提示词"""
         prompt = f"家长的问题：{query}\n\n"
 
         if context and context.get('baby_info'):
@@ -627,7 +661,7 @@ class RAGService:
         return prompt
 
     def _get_rag_system_prompt(self) -> str:
-        """获取RAG系统提示词"""
+        """获取 RAG 系统提示词"""
         return """你是「小儿安」，一位温暖、专业的儿科健康顾问。你的用户是焦虑的新手爸妈，请用朋友般的口吻和他们交流。
 
 ## 回答原则
@@ -640,105 +674,34 @@ class RAGService:
 - 像一位有经验的儿科护士在和家长聊天，温暖但不啰嗦
 - 用"宝宝""您"等亲切称呼
 - 避免学术论文式的长句，多用短句和口语化表达
-- 适当使用 emoji 增加亲和力（不超过3个）
 
-## 输出格式（使用标准 Markdown，确保排版清晰）
-
-### 📋 必须遵循的排版规则
-
-**1. 段落与换行**
-- 每个段落之间必须空一行（使用两个换行符）
-- 标题前后必须各空一行
-- 绝不能把多个段落挤在一起
-
-**2. 列表格式（强制要求）**
-- 数字列表必须使用 Markdown 标准语法：`1. ` `2. ` `3. `（注意点号后面有空格）
-- 每个列表项必须独占一行，严禁多个项写在同一行
-- 列表项之间不要空行，但列表整体前后要空一行
-
-**3. 标题层级**
-- 使用 `###` 作为板块标题（如 `### 💡 核心结论`）
-- 标题文字要简洁有力，加上 Emoji 增强识别
-
-**4. 强调格式**
-- 关键信息使用 `**加粗**`（如 `**体温超过39℃**`）
-- 药物名称、症状词、重要数据必须加粗
-- 不要使用 `_斜体_` 或 `~~删除线~~`
-
-**5. 紧急信息突出**
-- 就医警示使用 `> 🚨` 引用块格式
-- 或者单独一行以 `⚠️` 开头
-
-### 📝 输出模板（严格按此结构）
-
-### 💡 核心结论
-
-[一句话总结，15字以内]
-
-
-### 🩺 护理建议
-
-1. [第一个具体步骤，不超过20字]
-2. [第二个具体步骤]
-3. [第三个具体步骤]
-
-
-### ⚠️ 需要注意
-
-- [注意点1，用 - 开头]
-- [注意点2]
-
-
-> 🚨 **这些情况请立即就医**
->
-> - [就医信号1]
-> - [就医信号2]
-> - [就医信号3]
-
-
-### 💭 您可能还想了解
-
-- [引导问题1]
-- [引导问题2]
-- [引导问题3]
-
-### 🚫 禁止的排版行为
-
-- ❌ 将 1. 2. 3. 写在同一行
-- ❌ 标题后不换行直接接内容
-- ❌ 整段文字没有任何换行
-- ❌ 使用 【来源:xxx】 或其他角标
+## 输出格式
+使用清晰的 Markdown 格式，包含：
+- 核心结论
+- 护理建议（编号列表）
+- 注意事项
+- 就医警示
+- 引导问题
 
 ## 禁止事项
 - 不要推荐具体处方药名称或剂量
-- 不要做出确诊性判断（如"您的宝宝得了XX"）
+- 不要做出确诊性判断
 - 不要使用绝对化承诺"""
 
-    def format_with_citations(self, answer: str, sources: List[KnowledgeSource]) -> str:
-        """
-        格式化答案，清理来源标记并返回纯净答案
-
-        Args:
-            answer: 原始答案
-            sources: 来源列表
-
-        Returns:
-            str: 清理后的答案（不拼接来源到正文）
-        """
-        # 清理 LLM 可能残留的来源标记
+    def format_with_citations(
+        self,
+        answer: str,
+        sources: List[KnowledgeSource]
+    ) -> str:
+        """格式化答案，清理来源标记"""
         clean_answer = re.sub(r'【来源:[^】]+】', '', answer).strip()
         return clean_answer
 
-    def get_sources_metadata(self, sources: List[KnowledgeSource]) -> List[Dict[str, Any]]:
-        """
-        单独返回来源元数据（供前端使用）
-
-        Args:
-            sources: 来源列表
-
-        Returns:
-            List[Dict[str, Any]]: 来源元数据列表
-        """
+    def get_sources_metadata(
+        self,
+        sources: List[KnowledgeSource]
+    ) -> List[Dict[str, Any]]:
+        """获取来源元数据"""
         return [
             {
                 "id": s.metadata.get("id", "unknown"),
@@ -749,20 +712,38 @@ class RAGService:
         ]
 
     def get_entry_by_id(self, entry_id: str) -> Optional[Dict[str, Any]]:
-        """
-        根据ID获取知识库条目（用于点击角标查看原文）
-
-        Args:
-            entry_id: 条目ID
-
-        Returns:
-            Optional[Dict[str, Any]]: 条目内容
-        """
+        """根据 ID 获取知识库条目"""
+        # 优先从本地知识库查找
         for entry in self.knowledge_base:
             if entry.get('id') == entry_id:
                 return entry
+
+        # 如果使用 ChromaDB，可以异步查询
+        # 这里保持同步接口，返回 None
         return None
 
 
-# 创建全局实例
-rag_service = RAGService()
+# 创建全局实例（延迟初始化）
+_rag_service: Optional[RAGService] = None
+
+
+def get_rag_service() -> RAGService:
+    """获取 RAG 服务单例"""
+    global _rag_service
+    if _rag_service is None:
+        _rag_service = RAGService()
+    return _rag_service
+
+
+# 向后兼容：保留原有的全局实例
+rag_service = None  # 延迟初始化
+
+
+def _init_rag_service():
+    """初始化 RAG 服务（在首次使用时调用）"""
+    global rag_service
+    if rag_service is None:
+        rag_service = get_rag_service()
+
+
+# 模块加载时不自动初始化，避免 ChromaDB 连接问题
