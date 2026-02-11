@@ -378,7 +378,8 @@ body {
   flex-direction: column;
   gap: var(--space-2);
   align-items: flex-start;
-  min-height: auto;
+  height: 100%;
+  min-height: 80px;
   box-shadow: var(--shadow-sm);
   overflow: hidden;
 }
@@ -2626,10 +2627,6 @@ body {
     height: 80px;
   }
 
-  .suggestion-grid {
-    grid-template-columns: 1fr;
-  }
-
   .suggestion-card {
     min-height: 80px;
     padding: var(--space-3);
@@ -2692,6 +2689,23 @@ body {
 
   .bmi-card__value {
     font-size: 36px;
+  }
+}
+
+/* 极小屏幕：建议卡片切回单列 */
+@media (max-width: 360px) {
+  .suggestion-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .inline-quick-replies {
+    margin: var(--space-2);
+    padding: var(--space-3);
+  }
+
+  .inline-reply-chip {
+    padding: 8px 16px;
+    font-size: 13px;
   }
 }
 
@@ -3000,6 +3014,146 @@ body {
 .reply-chip:active {
   background: var(--primary-100);
   transform: translateY(0);
+}
+
+/* Inline Quick Replies (in chat area, mimicking Ping An Health style) */
+.inline-quick-replies {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  margin: var(--space-2) var(--space-4);
+  background: var(--bg-card);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.inline-quick-replies__prompt {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.inline-quick-replies__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.inline-reply-chip {
+  padding: 10px 20px;
+  background: #F5F5F5;
+  border: 1px solid #E8E8E8;
+  color: var(--text-primary);
+  border-radius: 20px; /* Pill shape */
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.inline-reply-chip:hover {
+  background: #EBEBEB;
+  border-color: #D5D5D5;
+  transform: translateY(-1px);
+}
+
+.inline-reply-chip:active {
+  transform: translateY(0);
+}
+
+/* 多选选中状态 - 蓝底白字 */
+.inline-reply-chip.selected {
+  background: var(--primary-500);
+  border-color: var(--primary-500);
+  color: white;
+}
+
+.inline-reply-chip.selected:hover {
+  background: var(--primary-600);
+  border-color: var(--primary-600);
+}
+
+/* 操作区（输入框 + 确认按钮） */
+.inline-quick-replies__action-wrapper {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.inline-quick-replies__input-wrapper {
+  display: flex;
+  flex: 1;
+  gap: var(--space-2);
+}
+
+.inline-quick-replies__input {
+  flex: 1;
+  padding: 10px 16px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  background: white;
+  transition: border-color 0.2s ease;
+}
+
+.inline-quick-replies__input:focus {
+  outline: none;
+  border-color: var(--primary-400);
+}
+
+.inline-quick-replies__input::placeholder {
+  color: var(--text-placeholder);
+}
+
+.inline-quick-replies__send {
+  padding: 10px 20px;
+  background: var(--primary-500);
+  color: white;
+  border: none;
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.inline-quick-replies__send:hover {
+  background: var(--primary-600);
+}
+
+.inline-quick-replies__send:active {
+  background: var(--primary-700);
+}
+
+/* 确认按钮（多选模式） */
+.inline-quick-replies__confirm {
+  padding: 10px 24px;
+  background: var(--primary-500);
+  color: white;
+  border: none;
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.inline-quick-replies__confirm:hover:not(:disabled) {
+  background: var(--primary-600);
+}
+
+.inline-quick-replies__confirm:active:not(:disabled) {
+  background: var(--primary-700);
+}
+
+.inline-quick-replies__confirm:disabled {
+  background: var(--neutral-300);
+  color: var(--neutral-500);
+  cursor: not-allowed;
 }
 
 /* Adjust Composer for top-stacked elements */

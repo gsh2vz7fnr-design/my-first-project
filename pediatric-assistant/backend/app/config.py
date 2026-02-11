@@ -78,6 +78,9 @@ class Settings(BaseSettings):
     DANGER_SIGNALS_PATH: str = str(DATA_DIR / "triage_rules" / "danger_signals.json")
     SLOT_DEFINITIONS_PATH: str = str(DATA_DIR / "triage_rules" / "slot_definitions.json")
 
+    # 重构功能开关
+    USE_NEW_PIPELINE: bool = True  # 设为 False 可回滚到旧逻辑
+
     # 违禁词配置
     BLACKLIST_PATH: str = str(DATA_DIR / "blacklist")
     GENERAL_BLACKLIST_FILE: str = str(DATA_DIR / "blacklist" / "general_blacklist.txt")

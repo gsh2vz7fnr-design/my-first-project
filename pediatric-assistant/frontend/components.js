@@ -246,58 +246,8 @@ function createWelcomeScreen() {
   ];
 
   welcome.innerHTML = `
-    <!-- Hero Section -->
-    <div class="welcome-hero">
-      <div class="welcome-hero-watermark" aria-hidden="true">HEALTH</div>
-      <div class="welcome-hero-content">
-        <div class="welcome-hero-left">
-          <h1 class="welcome-hero-greeting">你好 ✨</h1>
-          <p class="welcome-hero-subtitle">智能儿科分诊助手，守护宝宝健康</p>
-        </div>
-        <div class="welcome-hero-right">
-          <div class="welcome-hero-avatar">
-            <svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
-              <!-- Background circle -->
-              <circle cx="100" cy="100" r="90" fill="var(--purple-50)" />
-
-              <!-- Body (white coat) -->
-              <path d="M60 140 Q60 120 80 120 L120 120 Q140 120 140 140 L140 180 L60 180 Z" fill="#FFFFFF" />
-              <path d="M60 140 Q60 120 80 120 L120 120 Q140 120 140 140" stroke="var(--purple-200)" stroke-width="2" fill="none" />
-
-              <!-- Head -->
-              <circle cx="100" cy="85" r="30" fill="#FFE0BD" />
-
-              <!-- Hair -->
-              <path d="M70 75 Q70 55 100 55 Q130 55 130 75 Q130 65 100 65 Q70 65 70 75" fill="#5E5CE6" />
-
-              <!-- Eyes -->
-              <circle cx="90" cy="82" r="3" fill="#1C1E35" />
-              <circle cx="110" cy="82" r="3" fill="#1C1E35" />
-
-              <!-- Smile -->
-              <path d="M92 92 Q100 98 108 92" stroke="#1C1E35" stroke-width="2" fill="none" stroke-linecap="round" />
-
-              <!-- Waving hand -->
-              <g transform="translate(145, 125) rotate(20)">
-                <rect x="0" y="0" width="8" height="25" rx="4" fill="#FFE0BD" />
-                <circle cx="4" cy="-5" r="6" fill="#FFE0BD" />
-              </g>
-
-              <!-- Stethoscope -->
-              <circle cx="100" cy="145" r="8" fill="var(--purple-500)" />
-              <path d="M100 145 L100 160" stroke="var(--purple-500)" stroke-width="3" />
-            </svg>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div class="chat-welcome-header">
-      <h1 class="chat-welcome-title">智能儿科助手</h1>
-    </div>
-
-    <div class="chat-welcome-suggestions">
-      <h2 class="suggestions-title">您可以这样问我：</h2>
+    <div class="chat-welcome-suggestions" style="margin-top: 20px;">
+      <h2 class="suggestions-title" style="text-align: left; margin-left: 0;">您可以这样问我：</h2>
       <div class="suggestion-grid" role="list" aria-label="快捷问题">
         ${suggestions
           .map(

@@ -5,6 +5,89 @@ const CURRENT_USER_ID = "test_user_001";
 let conversationId = null;
 let currentTab = "chat"; // Track current tab
 
+// ============ 自动滚动管理 ============
+let userScrolledUp = false; // 用户是否手动向上翻阅
+let scrollTimeout = null;   // 滚动防抖定时器
+
+/**
+ * 检查是否应该自动滚动到底部
+ * @returns {boolean} - 是否应该自动滚动
+ */
+function shouldAutoScroll() {
+  // 如果用户没有向上翻阅，总是自动滚动
+  if (!userScrolledUp) return true;
+
+  // 检查是否接近底部（距离底部 150px 以内视为"接近"）
+  const threshold = 150;
+  const distanceFromBottom = chat.scrollHeight - chat.scrollTop - chat.clientHeight;
+  return distanceFromBottom <= threshold;
+}
+
+/**
+ * 滚动到底部
+ * @param {boolean} smooth - 是否使用平滑滚动，默认 true
+ */
+function scrollToBottom(smooth = true) {
+  if (!chat) return;
+
+  // 使用 requestAnimationFrame 确保 DOM 更新后再滚动
+  requestAnimationFrame(() => {
+    if (smooth) {
+      chat.scrollTo({
+        top: chat.scrollHeight,
+        behavior: 'smooth'
+      });
+    } else {
+      chat.scrollTop = chat.scrollHeight;
+    }
+  });
+}
+
+/**
+ * 强制滚动到底部（忽略用户翻阅状态）
+ * 用于用户发送消息等关键场景
+ */
+function forceScrollToBottom() {
+  userScrolledUp = false;
+  scrollToBottom(true);
+}
+
+/**
+ * 处理聊天区域滚动事件
+ * 检测用户是否在查看历史消息
+ */
+function handleChatScroll() {
+  // 清除之前的定时器
+  if (scrollTimeout) clearTimeout(scrollTimeout);
+
+  // 防抖：滚动停止后检测
+  scrollTimeout = setTimeout(() => {
+    const distanceFromBottom = chat.scrollHeight - chat.scrollTop - chat.clientHeight;
+
+    // 如果距离底部超过 150px，认为用户在查看历史
+    userScrolledUp = distanceFromBottom > 150;
+  }, 100);
+}
+
+/**
+ * 监听消息内容高度变化（处理 Markdown 渲染等动态内容）
+ */
+function setupResizeObserver() {
+  if (typeof ResizeObserver === 'undefined') return;
+
+  const resizeObserver = new ResizeObserver(() => {
+    // 如果应该自动滚动，则在内容高度变化时滚动
+    if (shouldAutoScroll()) {
+      scrollToBottom(false); // 频繁触发时不用平滑滚动，避免卡顿
+    }
+  });
+
+  // 监听聊天区域内的所有消息
+  return resizeObserver;
+}
+
+let chatResizeObserver = null;
+
 // Tab change handler
 function handleTabChange(tabName) {
   currentTab = tabName;
@@ -118,6 +201,13 @@ root.appendChild(app);
 
 // Initialize: hide health panel by default
 healthDashboard.element.style.display = "none";
+
+// ============ 设置自动滚动监听 ============
+// 监听用户滚动行为
+chat.addEventListener('scroll', handleChatScroll);
+
+// 设置 ResizeObserver 监听内容高度变化
+chatResizeObserver = setupResizeObserver();
 
 // Listen for tab change events from header
 header.addEventListener("tabchange", (e) => {
@@ -269,7 +359,19 @@ function appendMessage(role, text, options = {}) {
     empty.remove();
   }
   chat.appendChild(bubble);
-  chat.scrollTop = chat.scrollHeight;
+
+  // 自动滚动到底部（用户发送消息时强制滚动）
+  if (role === 'user') {
+    forceScrollToBottom();
+  } else {
+    scrollToBottom(true);
+  }
+
+  // 监听消息高度变化（处理 Markdown 渲染后高度变化）
+  if (chatResizeObserver) {
+    chatResizeObserver.observe(bubble);
+  }
+
   return bubble;
 }
 
@@ -315,16 +417,54 @@ function createSourceToggle(sources) {
   return container;
 }
 
-// Quick Reply configuration
+// Quick Reply configuration - 槽位填充快捷选项
 const QUICK_REPLIES_MAP = {
-  '精神状态': ['嗜睡', '正常玩耍', '哭闹不止', '有点蔫'],
-  '体温': ['37.5℃', '38.0℃', '38.5℃', '39.0℃', '39.5℃', '40.0℃'],
-  '发烧持续时间': ['刚刚发现', '半天了', '一天了', '两天了', '三天以上'],
-  '伴随症状': ['无', '咳嗽', '流鼻涕', '呕吐', '腹泻', '皮疹'],
-  '大便性状': ['正常', '稀水样', '粘液便', '蛋花汤样', '柏油样'],
+  // 主要症状（后端 key: symptom/symptoms）
+  'symptom': ['发烧', '咳嗽', '流鼻涕', '呕吐', '腹泻', '皮疹', '哭闹不安', '其他'],
+  'symptoms': ['发烧', '咳嗽', '流鼻涕', '呕吐', '腹泻', '皮疹', '哭闹不安', '其他'],
+  '主要症状': ['发烧', '咳嗽', '流鼻涕', '呕吐', '腹泻', '皮疹', '哭闹不安', '其他'],
+
+  // 持续时间（后端 key: duration）
+  'duration': ['刚刚发现', '半天', '1天', '2天', '3天', '一周以上'],
+  '发烧持续时间': ['刚刚发现', '半天', '1天', '2天', '3天', '一周以上'],
+  '持续时间': ['刚刚发现', '半天', '1天', '2天', '3天', '一周以上'],
+
+  // 体温（后端 key: temperature）
+  'temperature': ['37.5℃', '38.0℃', '38.5℃', '39.0℃', '39.5℃', '40.0℃', '不确定'],
+  '体温': ['37.5℃', '38.0℃', '38.5℃', '39.0℃', '39.5℃', '40.0℃', '不确定'],
+
+  // 精神状态（后端 key: mental_state）
+  'mental_state': ['正常玩耍', '精神差/蔫', '嗜睡', '烦躁不安'],
+  '精神状态': ['正常玩耍', '精神差/蔫', '嗜睡', '烦躁不安'],
+
+  // 食欲（后端 key: appetite）
+  'appetite': ['正常进食', '食欲减退', '拒食', '呕吐'],
+  '食欲': ['正常进食', '食欲减退', '拒食', '呕吐'],
+  '进食情况': ['正常进食', '食欲减退', '拒食', '呕吐'],
+
+  // 进食情况（后端 key: food_intake）
+  'food_intake': ['正常进食', '进食减少', '拒食', '呕吐'],
+
+  // 尿量（后端 key: urine_output）
+  'urine_output': ['正常', '偏少', '明显减少', '无尿'],
   '尿量': ['正常', '偏少', '明显减少', '无尿'],
+
+  // 伴随症状（后端 key: accompanying_symptoms）
+  'accompanying_symptoms': ['无', '咳嗽', '呕吐', '腹泻', '皮疹', '呼吸急促'],
+  '伴随症状': ['无', '咳嗽', '呕吐', '腹泻', '皮疹', '呼吸急促'],
+
+  // 咳嗽类型（后端 key: cough_type）
+  'cough_type': ['干咳', '有痰咳', '犬吠样咳嗽', '痉挛性咳嗽'],
+  '咳嗽类型': ['干咳', '有痰咳', '犬吠样咳嗽', '痉挛性咳嗽'],
+
+  // 大便性状（后端 key: stool_character）
+  'stool_character': ['水样便', '糊状便', '黏液便', '脓血便'],
+  '大便性状': ['水样便', '糊状便', '黏液便', '脓血便'],
+
+  // 呼吸
   '呼吸': ['平稳', '急促', '困难', '有异响'],
-  '进食情况': ['正常', '食欲减退', '拒食', '呕吐'],
+
+  // 活动力
   '活动力': ['正常', '减弱', '不愿动']
 };
 
@@ -548,7 +688,7 @@ async function sendMessageStream(text, retryCount = 0) {
   const empty = chat.querySelector(".chat-empty");
   if (empty) empty.remove();
   chat.appendChild(thinkingBubble.element);
-  chat.scrollTop = chat.scrollHeight;
+  forceScrollToBottom(); // 用户发送消息后强制滚动
 
   // 实时格式化函数（防抖，避免频繁重渲染）
   function scheduleFormat() {
@@ -563,7 +703,10 @@ async function sendMessageStream(text, retryCount = 0) {
         cursor.textContent = "▋";
         streamBubble.bubble.appendChild(cursor);
         streamBubble.cursor = cursor;
-        chat.scrollTop = chat.scrollHeight;
+        // 流式输出时检查是否应该自动滚动
+        if (shouldAutoScroll()) {
+          scrollToBottom(false);
+        }
       }
     }, 80);
   }
@@ -633,65 +776,8 @@ async function sendMessageStream(text, retryCount = 0) {
                 showBanner("提示：该问题涉及安全红线，已触发系统拦截。", "warn");
               }
 
-              // Handle follow-up needed
-              if (metadata.need_follow_up && metadata.missing_slots) {
-                showBanner("提示：需要补充关键信息后才能给出更准确建议。", "info");
-
-                // Clear previous progress
-                clearComposerProgress();
-
-                // 1. Prepare data for Slot Tracker
-                const slotKeys = Object.keys(metadata.missing_slots);
-                const slotsData = slotKeys.map((key, index) => {
-                  const slotDef = metadata.missing_slots[key];
-                  return {
-                    label: slotDef.label || key,
-                    status: index === 0 ? "current" : "waiting",
-                    value: null
-                  };
-                });
-
-                // 2. Create Slot Tracker
-                activeSlotTracker = createSlotTracker(slotsData);
-                composer.refs.progress.appendChild(activeSlotTracker.element);
-
-                // 3. Create Quick Replies for the CURRENT slot (first one)
-                const currentSlotKey = slotKeys[0];
-                const currentSlotLabel = metadata.missing_slots[currentSlotKey].label || currentSlotKey;
-
-                const chips = QUICK_REPLIES_MAP[currentSlotKey] || QUICK_REPLIES_MAP[currentSlotLabel];
-
-                if (chips && chips.length > 0) {
-                  activeQuickReplies = createQuickReplies(chips, (value) => {
-                    composer.refs.input.value = value;
-                    sendMessage();
-                  });
-                  composer.refs.progress.appendChild(activeQuickReplies.element);
-                }
-
-                // 4. Update Input Placeholder
-                composer.refs.input.placeholder = `请描述${currentSlotLabel}...`;
-
-                // 5. Create inline form fields
-                const form = createFollowUpForm(metadata.missing_slots, (values) => {
-                  const followUpMessage = Object.entries(values)
-                    .map(([key, value]) => {
-                      if (Array.isArray(value)) {
-                        return `${key}: ${value.join(", ")}`;
-                      }
-                      return `${key}: ${value}`;
-                    })
-                    .join("\n");
-
-                  appendMessage("user", followUpMessage);
-                  form.element.remove();
-                  clearComposerProgress();
-                  sendMessageStream(followUpMessage);
-                });
-
-                chat.appendChild(form.element);
-                chat.scrollTop = chat.scrollHeight;
-              }
+              // Note: follow-up quick replies 将在 done 事件后创建
+              // 因为需要等 assistant 消息先渲染到 chat 中
 
               continue;
             }
@@ -716,11 +802,19 @@ async function sendMessageStream(text, retryCount = 0) {
               if (!streamBubble) {
                 streamBubble = createStreamBubble({ role: "assistant", initialText: "" });
                 chat.appendChild(streamBubble.element);
+                // 监听流式气泡的高度变化
+                if (chatResizeObserver) {
+                  chatResizeObserver.observe(streamBubble.element);
+                }
               }
 
               accumulatedText += data.content;
               streamBubble.appendText(data.content);
-              chat.scrollTop = chat.scrollHeight;
+
+              // 流式输出时检查是否应该自动滚动
+              if (shouldAutoScroll()) {
+                scrollToBottom(false);
+              }
 
               // 触发实时格式化（防抖）
               scheduleFormat();
@@ -737,6 +831,8 @@ async function sendMessageStream(text, retryCount = 0) {
                 errorBubble.cursor.remove();
                 chat.appendChild(errorBubble.element);
               }
+              // 错误消息强制滚动到底部
+              forceScrollToBottom();
               showBanner("⚠️ 安全警示：该回复已被系统拦截。", "warn");
             } else if (data.type === "done") {
               // 清除防抖定时器
@@ -770,8 +866,208 @@ async function sendMessageStream(text, retryCount = 0) {
                   const sourceToggle = createSourceToggle(metadata.sources);
                   streamBubble.bubble.appendChild(sourceToggle);
                 }
+              }
 
-                chat.scrollTop = chat.scrollHeight;
+              // ===== 在 done 后创建 Quick Replies（确保位置在 assistant 消息之后）=====
+              if (metadata && metadata.need_follow_up && metadata.missing_slots) {
+                showBanner("提示：需要补充关键信息后才能给出更准确建议。", "info");
+                clearComposerProgress();
+
+                // 解析 missing_slots - 兼容数组和对象两种格式
+                let slotKeys = [];
+                let slotDefs = {};
+
+                if (Array.isArray(metadata.missing_slots)) {
+                  // 数组格式: ["symptom", "duration"]
+                  slotKeys = metadata.missing_slots;
+                  slotKeys.forEach(key => {
+                    slotDefs[key] = { label: key, options: [] };
+                  });
+                } else if (typeof metadata.missing_slots === 'object') {
+                  // 对象格式: {"symptom": {"label": "症状", "options": [...]}}
+                  slotKeys = Object.keys(metadata.missing_slots);
+                  slotDefs = metadata.missing_slots;
+                }
+
+                if (slotKeys.length === 0) {
+                  console.warn('[Slot Filling] missing_slots 为空');
+                  return;
+                }
+
+                const currentSlotKey = slotKeys[0];
+                const currentSlotDef = slotDefs[currentSlotKey] || {};
+
+                // 获取 label - 多重 fallback
+                const SLOT_LABEL_MAP = {
+                  'symptom': '主要症状',
+                  'symptoms': '主要症状',
+                  'duration': '持续时间',
+                  'temperature': '体温',
+                  'mental_state': '精神状态',
+                  'appetite': '食欲情况',
+                  'urine_output': '尿量',
+                  'food_intake': '进食情况',
+                  'accompanying_symptoms': '伴随症状',
+                  'cough_type': '咳嗽类型',
+                  'stool_character': '大便性状',
+                };
+                const currentSlotLabel = currentSlotDef.label || SLOT_LABEL_MAP[currentSlotKey] || currentSlotKey || '信息';
+
+                // 获取选项 - 优先后端 options，fallback 到前端预设
+                let chips = [];
+                if (currentSlotDef.options && Array.isArray(currentSlotDef.options) && currentSlotDef.options.length > 0) {
+                  chips = currentSlotDef.options.map(opt => {
+                    if (typeof opt === 'string') return opt;
+                    return opt.label || opt.value;
+                  });
+                } else {
+                  chips = QUICK_REPLIES_MAP[currentSlotKey] || QUICK_REPLIES_MAP[currentSlotLabel] || [];
+                }
+
+                console.log('[Slot Filling] currentSlotKey:', currentSlotKey, 'label:', currentSlotLabel, 'chips:', chips);
+
+                // 判断是否支持多选（symptom/symptoms/accompanying_symptoms 等支持多选）
+                const MULTI_SELECT_SLOTS = ['symptom', 'symptoms', 'accompanying_symptoms', '伴随症状'];
+                const allowMultiSelect = MULTI_SELECT_SLOTS.includes(currentSlotKey);
+
+                // 创建 Quick Replies 容器
+                const quickRepliesContainer = document.createElement("div");
+                quickRepliesContainer.className = "inline-quick-replies";
+
+                // 提示文字
+                const promptText = document.createElement("div");
+                promptText.className = "inline-quick-replies__prompt";
+                if (allowMultiSelect && chips.length > 0) {
+                  promptText.textContent = `请选择${currentSlotLabel}（可多选）：`;
+                } else {
+                  promptText.textContent = `请选择或描述${currentSlotLabel}：`;
+                }
+                quickRepliesContainer.appendChild(promptText);
+
+                // 选中的值（多选模式用数组，单选模式用字符串）
+                let selectedValues = [];
+
+                // 快捷按钮
+                if (chips && chips.length > 0) {
+                  const chipsWrapper = document.createElement("div");
+                  chipsWrapper.className = "inline-quick-replies__chips";
+
+                  chips.forEach(chip => {
+                    const btn = document.createElement("button");
+                    btn.className = "inline-reply-chip";
+                    btn.textContent = chip;
+                    btn.dataset.value = chip;
+                    btn.dataset.selected = "false";
+
+                    btn.addEventListener("click", () => {
+                      if (allowMultiSelect) {
+                        // 多选模式：切换选中状态
+                        const isSelected = btn.dataset.selected === "true";
+                        if (isSelected) {
+                          // 取消选中
+                          btn.dataset.selected = "false";
+                          btn.classList.remove("selected");
+                          selectedValues = selectedValues.filter(v => v !== chip);
+                        } else {
+                          // 选中
+                          btn.dataset.selected = "true";
+                          btn.classList.add("selected");
+                          selectedValues.push(chip);
+                        }
+                        // 更新确认按钮状态
+                        updateConfirmButtonState();
+                      } else {
+                        // 单选模式：直接发送
+                        appendMessage("user", chip);
+                        quickRepliesContainer.remove();
+                        clearComposerProgress();
+                        sendMessageStream(chip);
+                      }
+                    });
+
+                    chipsWrapper.appendChild(btn);
+                  });
+
+                  quickRepliesContainer.appendChild(chipsWrapper);
+                }
+
+                // 底部操作区（输入框 + 按钮）
+                const actionWrapper = document.createElement("div");
+                actionWrapper.className = "inline-quick-replies__action-wrapper";
+
+                // 文本输入框（混合模式）
+                const inputWrapper = document.createElement("div");
+                inputWrapper.className = "inline-quick-replies__input-wrapper";
+
+                const textInput = document.createElement("input");
+                textInput.type = "text";
+                textInput.className = "inline-quick-replies__input";
+                textInput.placeholder = chips.length > 0 ? `或手动输入${currentSlotLabel}...` : `请输入${currentSlotLabel}...`;
+
+                // 确认按钮（多选模式显示，或混合输入时使用）
+                const confirmBtn = document.createElement("button");
+                confirmBtn.className = "inline-quick-replies__confirm";
+                confirmBtn.textContent = allowMultiSelect ? "选好了" : "发送";
+
+                // 更新确认按钮状态
+                function updateConfirmButtonState() {
+                  const hasInput = textInput.value.trim().length > 0;
+                  const hasSelection = selectedValues.length > 0;
+                  confirmBtn.disabled = !hasInput && !hasSelection;
+                  if (allowMultiSelect && hasSelection) {
+                    confirmBtn.textContent = `确认 (${selectedValues.length}项)`;
+                  } else {
+                    confirmBtn.textContent = allowMultiSelect ? "选好了" : "发送";
+                  }
+                }
+
+                textInput.addEventListener("input", updateConfirmButtonState);
+
+                // 发送逻辑
+                function sendValues() {
+                  const inputValue = textInput.value.trim();
+                  // 合并选中的 chips 和手动输入的内容
+                  let allValues = [...selectedValues];
+                  if (inputValue) {
+                    // 检查是否已包含该值
+                    if (!allValues.includes(inputValue)) {
+                      allValues.push(inputValue);
+                    }
+                  }
+
+                  if (allValues.length > 0) {
+                    const message = allValues.join("、");
+                    appendMessage("user", message);
+                    quickRepliesContainer.remove();
+                    clearComposerProgress();
+                    sendMessageStream(message);
+                  }
+                }
+
+                confirmBtn.addEventListener("click", sendValues);
+
+                textInput.addEventListener("keydown", (e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    sendValues();
+                  }
+                });
+
+                inputWrapper.appendChild(textInput);
+                actionWrapper.appendChild(inputWrapper);
+                actionWrapper.appendChild(confirmBtn);
+                quickRepliesContainer.appendChild(actionWrapper);
+
+                // 初始化确认按钮状态
+                updateConfirmButtonState();
+
+                // 添加到 chat 末尾（在 assistant 消息之后）
+                chat.appendChild(quickRepliesContainer);
+                forceScrollToBottom();
+                textInput.focus();
+              } else {
+                // 无 follow-up 时正常滚动
+                forceScrollToBottom();
               }
 
               if (firstTokenTime) {
@@ -801,6 +1097,8 @@ async function sendMessageStream(text, retryCount = 0) {
       } else {
         streamBubble.complete();
       }
+      // 最终滚动到底部
+      forceScrollToBottom();
     }
 
     // Reload conversation list to update metadata
@@ -824,6 +1122,8 @@ async function sendMessageStream(text, retryCount = 0) {
     errorBubble.bubble.innerHTML = "连接失败，请稍后重试。";
     errorBubble.cursor.remove();
     chat.appendChild(errorBubble.element);
+    // 错误消息强制滚动到底部
+    forceScrollToBottom();
     showBanner("连接失败，请检查网络或稍后重试。", "info");
   }
 }

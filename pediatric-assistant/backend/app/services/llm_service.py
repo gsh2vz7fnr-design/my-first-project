@@ -267,19 +267,26 @@ class LLMService:
         return """你是一个专业的儿科医疗意图识别助手。你的任务是从用户的输入中提取意图和关键实体。
 
 **意图类型**：
-- triage: 分诊（判断是否需要就医）
+- triage: 分诊（判断是否需要就医）- 用户首次描述症状，寻求医疗建议
 - consult: 咨询（询问护理知识、症状解释）
 - medication: 用药（询问药品用法、剂量）
 - care: 护理（询问日常护理方法）
 - greeting: 闲聊/打招呼（如：你好、谢谢）
-- slot_filling: 补充信息（用户回复上一轮追问的答案）
+- slot_filling: 补充信息（用户回复上一轮追问的答案，如回答"发烧"、"38度"、"1天"等）
+
+**⚠️ 重要：如何区分 triage 和 slot_filling**：
+- triage: 用户**首次**描述一个完整的医疗问题，包含疑问或寻求建议
+  - 例: "宝宝发烧了怎么办"、"孩子咳嗽三天了要紧吗"
+- slot_filling: 用户的回复是**简短的信息补充**，通常是对Bot追问的直接回答
+  - 例: "发烧"、"38度"、"1天"、"精神不好"、"流鼻涕、咳嗽"
+  - 如果输入**只是**症状名、数值、时长、状态等简短词汇，应该是 slot_filling
 
 **需要提取的实体**（如果有）：
 - symptom: 症状（如：发烧、呕吐、腹泻）
-- temperature: 体温（如：39度、38.5℃）
-- duration: 持续时长（如：2小时、1天）
-- mental_state: 精神状态（如：精神萎靡、嗜睡、玩耍正常）
-- age_months: 月龄（如：3个月、6个月）
+- temperature: 体温（如：39度、38.5℃）- 提取数值部分
+- duration: 持续时长（如：2小时、1天、半天、刚刚发现）
+- mental_state: 精神状态（如：精神萎靡、嗜睡、玩耍正常、精神不好）
+- age_months: 月龄（如：3个月、6个月）- 只提取数字
 - accompanying_symptoms: 伴随症状（如：咳嗽、皮疹）
 - fall_height: 摔倒高度或场景（如：床上、沙发、楼梯）
 - frequency: 频率（如：每小时一次、一天5次）
@@ -289,16 +296,67 @@ class LLMService:
 - stool_character: 大便性状（如：水样、糊状、有黏液、有血）
 - cry_pattern: 哭闹模式（如：持续性、间歇性、尖叫样）
 
-**输出格式**（必须是有效的JSON）：
+**One-shot Examples**:
+
+用户输入："我家宝宝8个月大，发烧38.5度一天了，精神不好"
 ```json
 {
   "intent": "triage",
+  "intent_confidence": 0.95,
+  "entities": {
+    "symptom": "发烧",
+    "age_months": 8,
+    "temperature": "38.5度",
+    "duration": "1天",
+    "mental_state": "精神不好"
+  }
+}
+```
+
+用户输入："发烧、流鼻涕"
+```json
+{
+  "intent": "slot_filling",
   "intent_confidence": 0.9,
   "entities": {
     "symptom": "发烧",
-    "temperature": "39度",
-    "duration": "2小时",
-    "mental_state": "精神萎靡"
+    "accompanying_symptoms": "流鼻涕"
+  }
+}
+```
+
+用户输入："38度5"
+```json
+{
+  "intent": "slot_filling",
+  "intent_confidence": 0.95,
+  "entities": {
+    "temperature": "38.5度"
+  }
+}
+```
+
+用户输入："刚刚发现"
+```json
+{
+  "intent": "slot_filling",
+  "intent_confidence": 0.95,
+  "entities": {
+    "duration": "刚刚发现"
+  }
+}
+```
+
+用户输入："宝宝2岁，拉肚子，一天拉了5次，水样的，怎么办"
+```json
+{
+  "intent": "triage",
+  "intent_confidence": 0.95,
+  "entities": {
+    "symptom": "腹泻",
+    "age_months": 24,
+    "frequency": "一天5次",
+    "stool_character": "水样"
   }
 }
 ```
@@ -306,7 +364,10 @@ class LLMService:
 **注意**：
 1. 只输出JSON，不要有任何其他文字
 2. 如果某个实体不存在，不要包含在entities中
-3. intent_confidence范围是0-1"""
+3. intent_confidence范围是0-1
+4. age_months 必须是数字（如 8 表示 8个月）
+5. duration 要保留原始表述（如 "刚刚发现"、"半天"、"1天"、"2-3天"）
+6. mental_state 要标准化为：正常玩耍、精神差、嗜睡、烦躁不安 等"""
 
     def _build_user_prompt(self, user_input: str, context: Optional[Dict[str, Any]]) -> str:
         """构建用户提示词"""
@@ -429,22 +490,70 @@ class LLMService:
                 entities["symptom"] = symptom
                 break
 
-        age_match = re.search(r"(\d+)\s*(个月|月龄)", user_input)
-        if age_match:
-            entities["age_months"] = int(age_match.group(1))
+        # 增强年龄提取 - 支持多种格式
+        # "8个月", "8 个月", "8月", "8月大", "8个月大", "宝宝8个月"
+        age_patterns = [
+            r"(\d+)\s*个?月(?:龄|大)?",  # 8个月, 8个月大, 8月龄
+            r"宝宝.*?(\d+)\s*个?月",      # 宝宝8个月
+            r"(\d+)月(?:大|龄)?",         # 8月大, 8月龄
+        ]
+        for pattern in age_patterns:
+            age_match = re.search(pattern, user_input)
+            if age_match:
+                entities["age_months"] = int(age_match.group(1))
+                break
 
-        temp_match = re.search(r"(\d+(?:\.\d+)?)\s*(度|℃)", user_input)
-        if temp_match:
-            entities["temperature"] = temp_match.group(0)
+        # 增强体温提取 - 支持更多格式
+        # "38.5度", "38.5℃", "发烧38.5", "体温38.5"
+        temp_patterns = [
+            r"(\d+(?:\.\d+)?)\s*(?:度|℃|°c)",
+            r"(?:发烧|体温|烧到?)[是为]?\s*(\d+(?:\.\d+)?)",
+        ]
+        for pattern in temp_patterns:
+            temp_match = re.search(pattern, user_input, re.IGNORECASE)
+            if temp_match:
+                temp_value = temp_match.group(1)
+                if float(temp_value) > 30 and float(temp_value) < 45:  # 合理体温范围
+                    entities["temperature"] = f"{temp_value}度"
+                break
 
-        duration_match = re.search(r"(\d+)\s*(小时|天)", user_input)
-        if duration_match:
-            entities["duration"] = duration_match.group(0)
+        # 增强持续时间提取
+        # "1天", "两天", "半天", "3小时", "刚刚发现"
+        duration_patterns = [
+            r"(刚刚发现|刚开始|刚发现)",
+            r"(半天|大半天)",
+            r"(\d+)\s*(?:天|日)",
+            r"(一两|两三|\d+[-~]\d+)\s*天",
+            r"(\d+)\s*(?:小时|个?钟头)",
+            r"(一|两|三|四|五|六|七|八|九|十)(?:天|日|小时)",
+        ]
+        for pattern in duration_patterns:
+            duration_match = re.search(pattern, user_input)
+            if duration_match:
+                entities["duration"] = duration_match.group(0)
+                break
 
-        mental_state_keywords = ["精神萎靡", "嗜睡", "难以唤醒", "玩耍正常", "精神正常", "精神好", "没精神"]
-        for k in mental_state_keywords:
-            if k in user_input:
-                entities["mental_state"] = k
+        # 增强精神状态提取
+        mental_state_keywords = [
+            ("精神萎靡", "精神萎靡"),
+            ("精神不好", "精神不好"),
+            ("精神差", "精神差"),
+            ("没精神", "精神差"),
+            ("有点蔫", "精神差"),
+            ("嗜睡", "嗜睡"),
+            ("难以唤醒", "嗜睡"),
+            ("想睡觉", "嗜睡"),
+            ("玩耍正常", "正常玩耍"),
+            ("精神正常", "正常玩耍"),
+            ("精神好", "正常玩耍"),
+            ("精神还可以", "正常玩耍"),
+            ("正常玩耍", "正常玩耍"),
+            ("哭闹", "哭闹不安"),
+            ("烦躁", "烦躁不安"),
+        ]
+        for keyword, state in mental_state_keywords:
+            if keyword in user_input:
+                entities["mental_state"] = state
                 break
 
         accompany = []

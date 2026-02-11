@@ -13,6 +13,7 @@ from app.config import settings
 from app.routers import chat, profile
 from app.services.profile_service import profile_service
 from app.services.conversation_service import conversation_service
+from app.services.conversation_state_service import conversation_state_service
 from app.middleware.performance import performance_monitor
 
 
@@ -29,6 +30,7 @@ async def lifespan(app: FastAPI):
         logger.warning("未配置 SECRET_KEY，请在生产环境中设置")
     profile_service.init_db()
     conversation_service.init_db()
+    conversation_state_service.init_db()
     asyncio.create_task(profile_service.start_worker())
     yield
     # shutdown
