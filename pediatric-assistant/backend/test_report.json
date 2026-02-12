@@ -1,0 +1,120 @@
+{
+  "extraction_accuracy": [
+    {
+      "test": "单一症状描述 - 主诉提取",
+      "passed": true,
+      "details": "主诉正确提取",
+      "timestamp": "2026-02-12T09:15:46.048953"
+    },
+    {
+      "test": "跨轮次累积 - 实体合并",
+      "passed": true,
+      "details": "累积槽位: ['temperature', 'cough']",
+      "timestamp": "2026-02-12T09:15:46.048966"
+    },
+    {
+      "test": "分诊结果记录",
+      "passed": true,
+      "details": "分诊级别: observe",
+      "timestamp": "2026-02-12T09:15:46.048971"
+    },
+    {
+      "test": "对话状态管理",
+      "passed": true,
+      "details": "当前状态: DialogueState.TRIAGE_COMPLETE",
+      "timestamp": "2026-02-12T09:15:46.048976"
+    }
+  ],
+  "data_consistency": [
+    {
+      "test": "处方记录 - 诊断信息保存",
+      "passed": true,
+      "details": "诊断信息: 上呼吸道感染",
+      "timestamp": "2026-02-12T09:15:46.049469"
+    },
+    {
+      "test": "问诊记录 - summary包含诊断",
+      "passed": true,
+      "details": "Summary: 患儿因发烧、咳嗽就诊，诊断为急性支气管炎...",
+      "timestamp": "2026-02-12T09:15:46.049870"
+    },
+    {
+      "test": "记录计数一致性",
+      "passed": true,
+      "details": "处方: 1, 问诊: 1",
+      "timestamp": "2026-02-12T09:15:46.050004"
+    },
+    {
+      "test": "member_id关联一致性",
+      "passed": true,
+      "details": "member_id一致: test_member_001",
+      "timestamp": "2026-02-12T09:15:46.050091"
+    }
+  ],
+  "persistence": [
+    {
+      "test": "写入后立即读取",
+      "passed": true,
+      "details": "诊断信息正确持久化: 过敏性鼻炎",
+      "timestamp": "2026-02-12T09:15:46.050461"
+    },
+    {
+      "test": "跨连接读取（模拟重启）",
+      "passed": true,
+      "details": "新连接可读取诊断信息",
+      "timestamp": "2026-02-12T09:15:46.050545"
+    },
+    {
+      "test": "用户数据隔离",
+      "passed": true,
+      "details": "用户1处方数: 2, 用户2: 1",
+      "timestamp": "2026-02-12T09:15:46.051045"
+    }
+  ],
+  "boundary_conditions": [
+    {
+      "test": "空诊断信息处理",
+      "passed": true,
+      "details": "允许空诊断: None",
+      "timestamp": "2026-02-12T09:15:46.051385"
+    },
+    {
+      "test": "超长诊断信息处理",
+      "passed": true,
+      "details": "保存了1000字符",
+      "timestamp": "2026-02-12T09:15:46.051753"
+    },
+    {
+      "test": "特殊字符处理",
+      "passed": true,
+      "details": "特殊字符正确保存",
+      "timestamp": "2026-02-12T09:15:46.052099"
+    },
+    {
+      "test": "无效member_id处理",
+      "passed": true,
+      "details": "返回空计数而非错误",
+      "timestamp": "2026-02-12T09:15:46.052219"
+    }
+  ],
+  "business_logic": [
+    {
+      "test": "完整就诊流程 - 记录关联",
+      "passed": true,
+      "details": "同一就诊的问诊和处方正确关联",
+      "timestamp": "2026-02-12T09:15:46.052993"
+    },
+    {
+      "test": "复诊场景 - 历史诊断追踪",
+      "passed": true,
+      "details": "找到2条哮喘相关诊断记录",
+      "timestamp": "2026-02-12T09:15:46.053677"
+    },
+    {
+      "test": "健康记录完整性",
+      "passed": true,
+      "details": "共有10条记录",
+      "timestamp": "2026-02-12T09:15:46.053849"
+    }
+  ]
+}
