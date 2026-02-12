@@ -910,6 +910,14 @@ async function sendMessageStream(text, retryCount = 0) {
   chat.appendChild(thinkingBubble.element);
   forceScrollToBottom(); // 用户发送消息后强制滚动
 
+  // ✅ 添加调试日志：显示发送时的 conversationId
+  console.log(`[SEND] conversationId: ${conversationId}, message: ${text.substring(0, 30)}...`);
+  console.log(`[SEND] Full payload:`, {
+    conversation_id: conversationId,
+    user_id: CURRENT_USER_ID,
+    message: text
+  });
+
   // 实时格式化函数（防抖，避免频繁重渲染）
   function scheduleFormat() {
     if (formatTimer) clearTimeout(formatTimer);
