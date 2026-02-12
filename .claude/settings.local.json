@@ -86,7 +86,15 @@
       "Bash(.venv/bin/python:*)",
       "Bash(/Users/zhang/Desktop/Claude/pediatric-assistant/.venv/bin/python3:*)",
       "Bash(/Users/zhang/Desktop/Claude/pediatric-assistant/.venv/bin/pip:*)",
-      "mcp__zai-mcp-server__analyze_image"
+      "mcp__zai-mcp-server__analyze_image",
+      "mcp__zai-mcp-server__extract_text_from_screenshot",
+      "Bash(sort:*)",
+      "Bash(git log:*)",
+      "Bash(PYTHONPATH=/Users/zhang/Desktop/Claude/pediatric-assistant/backend /Users/zhang/Desktop/Claude/pediatric-assistant/.venv/bin/python3:*)",
+      "Bash(PYTHONPATH=/Users/zhang/Desktop/Claude/pediatric-assistant/backend uvicorn:*)",
+      "Bash(ps:*)",
+      "Bash(pkill:*)",
+      "Bash(venv/bin/python:*)"
     ]
   }
 }
