@@ -264,7 +264,7 @@ class LLMService:
 
     def _build_intent_extraction_prompt(self) -> str:
         """构建意图提取的系统提示词"""
-        return """你是一个专业的儿科医疗意图识别助手。你的任务是从用户的输入中提取意图和关键实体。
+        return """你是一个专业的儿科医疗意图识别助手。你的任务是从用户的输入中提取意图和所有关键实体。
 
 **意图类型**：
 - triage: 分诊（判断是否需要就医）- 用户首次描述症状，寻求医疗建议
@@ -283,7 +283,7 @@ class LLMService:
 
 **需要提取的实体**（如果有）：
 - symptom: 症状（如：发烧、呕吐、腹泻）
-- temperature: 体温（如：39度、38.5℃）- 提取数值部分
+- temperature: 体温（如：39度、38.5℃、38.5）- 提取数值部分，统一带上"℃"或"度"
 - duration: 持续时长（如：2小时、1天、半天、刚刚发现）
 - mental_state: 精神状态（如：精神萎靡、嗜睡、玩耍正常、精神不好）
 - age_months: 月龄（如：3个月、6个月）- 只提取数字
@@ -302,7 +302,7 @@ class LLMService:
 ```json
 {
   "intent": "triage",
-  "intent_confidence": 0.95,
+  "intent_confidence": 0.99,
   "entities": {
     "symptom": "发烧",
     "age_months": 8,
@@ -325,7 +325,7 @@ class LLMService:
 }
 ```
 
-用户输入："38度5"
+用户输入："38.5"
 ```json
 {
   "intent": "slot_filling",
@@ -363,9 +363,9 @@ class LLMService:
 
 **注意**：
 1. 只输出JSON，不要有任何其他文字
-2. 如果某个实体不存在，不要包含在entities中
+2. **尽可能提取所有出现的实体**，特别是年龄(age_months)和体温(temperature)
 3. intent_confidence范围是0-1
-4. age_months 必须是数字（如 8 表示 8个月）
+4. age_months 必须是数字（如 8 表示 8个月，2岁要转换为24）
 5. duration 要保留原始表述（如 "刚刚发现"、"半天"、"1天"、"2-3天"）
 6. mental_state 要标准化为：正常玩耍、精神差、嗜睡、烦躁不安 等"""
 
@@ -491,16 +491,37 @@ class LLMService:
                 break
 
         # 增强年龄提取 - 支持多种格式
-        # "8个月", "8 个月", "8月", "8月大", "8个月大", "宝宝8个月"
+        # "8个月", "8 个月", "8月", "8月大", "8个月大", "宝宝8个月", "2岁", "两岁半"
         age_patterns = [
             r"(\d+)\s*个?月(?:龄|大)?",  # 8个月, 8个月大, 8月龄
             r"宝宝.*?(\d+)\s*个?月",      # 宝宝8个月
             r"(\d+)月(?:大|龄)?",         # 8月大, 8月龄
+            r"(\d+)\s*岁(?:半)?",          # 2岁, 2岁半
+            r"(一|两|三|四|五|六)\s*岁(?:半)?", # 两岁, 两岁半
         ]
+        
+        cn_num_map = {"一": 1, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6}
+
         for pattern in age_patterns:
             age_match = re.search(pattern, user_input)
             if age_match:
-                entities["age_months"] = int(age_match.group(1))
+                raw_val = age_match.group(1)
+                is_year = "岁" in age_match.group(0)
+                is_half = "半" in age_match.group(0)
+                
+                # 转换中文数字
+                num_val = cn_num_map.get(raw_val, raw_val)
+                try:
+                    num_val = int(num_val)
+                    if is_year:
+                        total_months = num_val * 12
+                        if is_half:
+                            total_months += 6
+                        entities["age_months"] = total_months
+                    else:
+                        entities["age_months"] = num_val
+                except ValueError:
+                    continue # 无法转换则跳过
                 break
 
         # 增强体温提取 - 支持更多格式
@@ -606,6 +627,28 @@ class LLMService:
         intent_type = result.get("intent") or "consult"
         confidence = result.get("intent_confidence") or 0.4
         entities = result.get("entities") or {}
+
+        # 归一化键名：age -> age_months, month_age -> age_months
+        if "age" in entities:
+            entities["age_months"] = entities.pop("age")
+        if "month_age" in entities:
+             entities["age_months"] = entities.pop("month_age")
+
+        # 归一化年龄值：将 "8个月" -> 8, "2岁" -> 24
+        if "age_months" in entities:
+            val = entities["age_months"]
+            if isinstance(val, str):
+                # 尝试提取数字
+                match = re.search(r"(\d+)", val)
+                if match:
+                    num = int(match.group(1))
+                    # 简单启发式：如果包含"岁"，乘12
+                    if "岁" in val:
+                        num *= 12
+                    entities["age_months"] = num
+                else:
+                    # 无法解析则删除，避免脏数据
+                    del entities["age_months"]
 
         symptom = entities.get("symptom")
         if symptom:

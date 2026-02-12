@@ -3,12 +3,13 @@
 
 新增功能：
 - SQLite 持久化 medical_contexts 表
-- 内存缓存减少 DB 读取
+- LRU 缓存减少 DB 读取，自动淘汰最久未访问的条目
 - 向后兼容旧的 merge_entities/get_entities 接口
 """
 import json
 import sqlite3
 import threading
+from collections import OrderedDict
 from typing import Dict, Any, Optional
 from datetime import datetime
 from pathlib import Path
@@ -16,6 +17,39 @@ from loguru import logger
 
 from app.models.medical_context import MedicalContext
 from app.config import settings
+
+
+class LRUCache:
+    """基于 OrderedDict 的 LRU 缓存，限制最大条目数"""
+
+    def __init__(self, max_size: int = 200):
+        self._cache: OrderedDict[str, Any] = OrderedDict()
+        self._max_size = max_size
+
+    def get(self, key: str):
+        if key in self._cache:
+            self._cache.move_to_end(key)
+            return self._cache[key]
+        return None
+
+    def put(self, key: str, value):
+        if key in self._cache:
+            self._cache.move_to_end(key)
+        self._cache[key] = value
+        if len(self._cache) > self._max_size:
+            self._cache.popitem(last=False)
+
+    def remove(self, key: str):
+        self._cache.pop(key, None)
+
+    def __contains__(self, key: str) -> bool:
+        return key in self._cache
+
+    def values(self):
+        return self._cache.values()
+
+    def clear(self):
+        self._cache.clear()
 
 
 class ConversationStateService:
@@ -36,8 +70,8 @@ class ConversationStateService:
         self._state: Dict[str, Dict[str, Any]] = {}
         self._lock = threading.Lock()
 
-        # 新版：MedicalContext 缓存
-        self._context_cache: Dict[str, MedicalContext] = {}
+        # 新版：LRU 缓存（自动淘汰最久未访问的条目）
+        self._context_cache = LRUCache(max_size=200)
 
         # 数据库路径
         self._db_path = db_path or settings.SQLITE_DB_PATH
@@ -101,8 +135,9 @@ class ConversationStateService:
                 return self._state[conversation_id].copy()
 
             # 尝试从 MedicalContext 缓存获取
-            if conversation_id in self._context_cache:
-                return self._context_cache[conversation_id].get_entities_dict()
+            cached = self._context_cache.get(conversation_id)
+            if cached:
+                return cached.get_entities_dict()
 
             return {}
 
@@ -143,8 +178,7 @@ class ConversationStateService:
                 del self._state[conversation_id]
 
             # 清除 MedicalContext 缓存
-            if conversation_id in self._context_cache:
-                del self._context_cache[conversation_id]
+            self._context_cache.remove(conversation_id)
 
             logger.info(f"[ConversationState] 已清除对话 {conversation_id} 的状态")
 
@@ -201,8 +235,9 @@ class ConversationStateService:
         """
         with self._lock:
             # 1. 检查缓存
-            if conversation_id in self._context_cache:
-                return self._context_cache[conversation_id]
+            cached = self._context_cache.get(conversation_id)
+            if cached:
+                return cached
 
             # 2. 尝试从数据库加载
             if self._db_initialized:
@@ -218,7 +253,7 @@ class ConversationStateService:
 
                     if row:
                         ctx = MedicalContext.from_db_json(row[0])
-                        self._context_cache[conversation_id] = ctx
+                        self._context_cache.put(conversation_id, ctx)
                         logger.info(f"[ConversationState] 从数据库恢复对话 {conversation_id}")
                         return ctx
 
@@ -230,7 +265,7 @@ class ConversationStateService:
                 conversation_id=conversation_id,
                 user_id=user_id
             )
-            self._context_cache[conversation_id] = ctx
+            self._context_cache.put(conversation_id, ctx)
             return ctx
 
     def save_medical_context(self, ctx: MedicalContext) -> bool:
@@ -245,7 +280,7 @@ class ConversationStateService:
         """
         with self._lock:
             # 更新缓存
-            self._context_cache[ctx.conversation_id] = ctx
+            self._context_cache.put(ctx.conversation_id, ctx)
             ctx.updated_at = datetime.now()
 
             if not self._db_initialized:
@@ -294,8 +329,7 @@ class ConversationStateService:
         """
         with self._lock:
             # 清除缓存
-            if conversation_id in self._context_cache:
-                del self._context_cache[conversation_id]
+            self._context_cache.remove(conversation_id)
 
             if not self._db_initialized:
                 return True

@@ -35,6 +35,14 @@ class IntentType(str, Enum):
     CARE = "care"
 
 
+class TriageSnapshot(BaseModel):
+    """分诊结果快照，分诊完成时一次性写入"""
+    level: str = Field(..., description="分诊级别: emergency/urgent/observe/online/self_care")
+    reason: str = Field(..., description="分诊原因")
+    action: str = Field(..., description="分诊建议行动")
+    decided_at: datetime = Field(default_factory=datetime.now, description="决定时间")
+
+
 class MedicalContext(BaseModel):
     """
     医疗上下文模型
@@ -68,17 +76,9 @@ class MedicalContext(BaseModel):
         default_factory=dict,
         description="累积的实体槽位"
     )
-    triage_level: Optional[str] = Field(
+    triage_snapshot: Optional[TriageSnapshot] = Field(
         default=None,
-        description="分诊级别: emergency/observe/online"
-    )
-    triage_reason: Optional[str] = Field(
-        default=None,
-        description="分诊原因"
-    )
-    triage_action: Optional[str] = Field(
-        default=None,
-        description="分诊建议行动"
+        description="分诊结果快照，分诊完成时一次性写入"
     )
     danger_signal: Optional[str] = Field(
         default=None,
@@ -97,40 +97,104 @@ class MedicalContext(BaseModel):
         description="更新时间"
     )
 
+    @property
+    def triage_level(self) -> Optional[str]:
+        """向后兼容：从 triage_snapshot 读取 level"""
+        return self.triage_snapshot.level if self.triage_snapshot else None
+
+    @triage_level.setter
+    def triage_level(self, value: Optional[str]):
+        """向后兼容：设置 triage_level 时自动创建/更新 snapshot"""
+        if value is None:
+            return
+        if self.triage_snapshot is None:
+            self.triage_snapshot = TriageSnapshot(level=value, reason="", action="")
+        else:
+            self.triage_snapshot.level = value
+
+    @property
+    def triage_reason(self) -> Optional[str]:
+        """向后兼容：从 triage_snapshot 读取 reason"""
+        return self.triage_snapshot.reason if self.triage_snapshot else None
+
+    @triage_reason.setter
+    def triage_reason(self, value: Optional[str]):
+        """向后兼容：设置 triage_reason 时更新 snapshot"""
+        if value is None:
+            return
+        if self.triage_snapshot is None:
+            self.triage_snapshot = TriageSnapshot(level="", reason=value, action="")
+        else:
+            self.triage_snapshot.reason = value
+
+    @property
+    def triage_action(self) -> Optional[str]:
+        """向后兼容：从 triage_snapshot 读取 action"""
+        return self.triage_snapshot.action if self.triage_snapshot else None
+
+    @triage_action.setter
+    def triage_action(self, value: Optional[str]):
+        """向后兼容：设置 triage_action 时更新 snapshot"""
+        if value is None:
+            return
+        if self.triage_snapshot is None:
+            self.triage_snapshot = TriageSnapshot(level="", reason="", action=value)
+        else:
+            self.triage_snapshot.action = value
+
     def merge_entities(self, new_entities: Dict[str, Any]) -> None:
         """
-        合并新实体到已有槽位
+        合并新实体到已有槽位 (增量更新)
 
         规则：
-        1. 新值覆盖旧值（last-write-wins）
-        2. None 和空字符串不覆盖已有值
-        3. 列表类型会合并而不是覆盖
-
-        Args:
-            new_entities: 新提取的实体字典
+        1. 新值覆盖旧值（last-write-wins），除非新值为 None/空
+        2. 列表类型（如 symptoms）进行合并去重
+        3. 字符串类型若为 'unknown' 或 '未提及' 则忽略
         """
         for key, value in new_entities.items():
-            if value is None or value == "":
+            # 忽略空值
+            if value in [None, "", [], {}]:
+                continue
+            
+            # 忽略无效占位符
+            if isinstance(value, str) and value.lower() in ["unknown", "n/a", "未提及", "不清楚"]:
                 continue
 
-            if key in self.slots:
-                existing = self.slots[key]
-                # 如果是列表类型，进行合并
-                if isinstance(existing, list) and isinstance(value, list):
-                    self.slots[key] = existing + value
-                elif isinstance(existing, str) and isinstance(value, str):
-                    # 对于字符串，如果是伴随症状，可以追加
-                    if key == "accompanying_symptoms" and value not in existing:
-                        self.slots[key] = f"{existing}，{value}"
-                    else:
-                        self.slots[key] = value
-                else:
-                    self.slots[key] = value
+            # 处理列表合并 (symptoms, accompanying_symptoms)
+            if key in ["symptoms", "accompanying_symptoms", "symptom_list"]:
+                current = self.slots.get(key, [])
+                if not isinstance(current, list):
+                    current = [current] if current else []
+                
+                new_vals = value if isinstance(value, list) else [value]
+                # 合并并去重
+                merged = list(set(current + new_vals))
+                self.slots[key] = merged
+            
+            # 特殊处理：如果提取到了 age 但 slots 里是 age_months，尝试转换或保留
+            # 这里简单处理：直接更新
             else:
                 self.slots[key] = value
 
+        # 同步更新主症状字段 (如果有)
+        if "symptom" in new_entities and new_entities["symptom"]:
+             self.symptom = new_entities["symptom"]
+        elif "symptoms" in self.slots and isinstance(self.slots["symptoms"], list) and len(self.slots["symptoms"]) > 0:
+             # 如果没有主症状但有症状列表，取第一个作为主症状
+             if not self.symptom:
+                 self.symptom = self.slots["symptoms"][0]
+
         # 更新时间戳
         self.updated_at = datetime.now()
+
+    def has_required_slots(self, required_slots: List[str]) -> bool:
+        """
+        检查是否已收集所有必需槽位
+        """
+        for slot in required_slots:
+            if slot not in self.slots or self.slots[slot] in [None, ""]:
+                return False
+        return True
 
     def get_missing_slots(
         self,
@@ -188,12 +252,18 @@ class MedicalContext(BaseModel):
         data["dialogue_state"] = self.dialogue_state.value
         if self.current_intent:
             data["current_intent"] = self.current_intent.value
+        # triage_snapshot 中的 datetime 转换
+        if self.triage_snapshot:
+            data["triage_snapshot"]["decided_at"] = self.triage_snapshot.decided_at.isoformat()
         return json.dumps(data, ensure_ascii=False)
 
     @classmethod
     def from_db_json(cls, json_str: str) -> "MedicalContext":
         """
         从数据库 JSON 字符串恢复 MedicalContext
+
+        兼容旧格式：如果数据中有 triage_level/triage_reason/triage_action
+        但没有 triage_snapshot，则自动迁移为 snapshot 格式。
 
         Args:
             json_str: JSON 序列化的上下文
@@ -212,6 +282,26 @@ class MedicalContext(BaseModel):
             data["created_at"] = datetime.fromisoformat(data["created_at"])
         if isinstance(data.get("updated_at"), str):
             data["updated_at"] = datetime.fromisoformat(data["updated_at"])
+        # triage_snapshot 中的 datetime 恢复
+        if data.get("triage_snapshot") and isinstance(data["triage_snapshot"].get("decided_at"), str):
+            data["triage_snapshot"]["decided_at"] = datetime.fromisoformat(data["triage_snapshot"]["decided_at"])
+        # 兼容旧数据：从分散的字段迁移到 triage_snapshot
+        if data.get("triage_snapshot") is None:
+            old_level = data.pop("triage_level", None)
+            old_reason = data.pop("triage_reason", None)
+            old_action = data.pop("triage_action", None)
+            if old_level:
+                data["triage_snapshot"] = {
+                    "level": old_level,
+                    "reason": old_reason or "",
+                    "action": old_action or "",
+                    "decided_at": data.get("updated_at", datetime.now()),
+                }
+        else:
+            # 移除旧字段（如果存在）
+            data.pop("triage_level", None)
+            data.pop("triage_reason", None)
+            data.pop("triage_action", None)
         return cls(**data)
 
     def increment_turn(self) -> None:

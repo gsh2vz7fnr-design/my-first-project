@@ -70,14 +70,28 @@ class TriageEngine:
         Returns:
             Optional[str]: 如果检测到危险信号，返回告警文案；否则返回None
         """
-        symptom = entities.get("symptom", "").lower()
+        symptom = entities.get("symptom", "")
+        if isinstance(symptom, list):
+            symptom = symptom[0] if symptom else ""
+        symptom = str(symptom).lower()
+
+        # 准备检查用的字符串
+        mental_state = entities.get("mental_state", "")
+        if isinstance(mental_state, list):
+            mental_state = " ".join([str(x) for x in mental_state])
+        mental_state = str(mental_state).lower()
+
+        acc_symptoms = entities.get("accompanying_symptoms", "")
+        if isinstance(acc_symptoms, list):
+            acc_symptoms = " ".join([str(x) for x in acc_symptoms])
+        acc_symptoms = str(acc_symptoms).lower()
 
         # 检查通用危险信号
         for signal in self.danger_signals.get("universal", []):
             keywords = signal.get("keywords", [])
             for keyword in keywords:
-                if keyword in entities.get("mental_state", "").lower() or \
-                   keyword in entities.get("accompanying_symptoms", "").lower() or \
+                if keyword in mental_state or \
+                   keyword in acc_symptoms or \
                    keyword in str(entities.values()).lower():
                     return signal.get("alert_message")
 
@@ -159,6 +173,37 @@ class TriageEngine:
         return None
 
     # ... (get_missing_slots, _should_relax_follow_up, generate_follow_up_question stay same) ...
+
+    def get_slot_options(self, slot: str) -> List[str]:
+        """
+        获取槽位的建议选项
+        
+        Args:
+            slot: 槽位名称
+            
+        Returns:
+            List[str]: 建议选项列表
+        """
+        # 这里可以从配置文件加载，目前先硬编码常见槽位的选项
+        options_map = {
+            "symptom": ["发烧", "咳嗽", "流鼻涕", "呕吐", "腹泻", "皮疹", "哭闹不安"],
+            "duration": ["刚刚发现", "半天", "1天", "2天", "3天", "一周以上"],
+            "temperature": ["37.5℃", "38.0℃", "38.5℃", "39.0℃", "39.5℃", "40.0℃", "不确定"],
+            "mental_state": ["正常玩耍", "精神差/蔫", "嗜睡", "烦躁不安"],
+            "appetite": ["正常进食", "食欲减退", "拒食", "呕吐"],
+            "food_intake": ["正常进食", "进食减少", "拒食", "呕吐"],
+            "urine_output": ["正常", "偏少", "明显减少", "无尿"],
+            "accompanying_symptoms": ["无", "咳嗽", "呕吐", "腹泻", "皮疹", "呼吸急促"],
+            "cough_type": ["干咳", "有痰咳", "犬吠样咳嗽", "痉挛性咳嗽"],
+            "stool_character": ["水样便", "糊状便", "黏液便", "脓血便"],
+            "breathing": ["平稳", "急促", "困难", "有异响"],
+            "activity": ["正常", "减弱", "不愿动"]
+        }
+        
+        # 处理别名
+        if slot == "symptoms": return options_map["symptom"]
+        
+        return options_map.get(slot, [])
 
     def make_triage_decision(
         self,

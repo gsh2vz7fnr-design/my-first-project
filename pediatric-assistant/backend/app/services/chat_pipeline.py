@@ -24,7 +24,8 @@ import asyncio
 from app.models.medical_context import (
     MedicalContext,
     DialogueState,
-    IntentType
+    IntentType,
+    TriageSnapshot
 )
 from app.models.user import ChatRequest, StreamChunk, TriageDecision
 from app.services.llm_service import llm_service
@@ -175,8 +176,15 @@ class ChatPipeline:
         logger.info(f"[Pipeline] 意图识别: {intent_result.intent.type}, 实体: {intent_result.entities}")
 
         # Step 5: 合并实体到 MedicalContext.slots
+        old_slots = ctx.slots.copy()
         ctx.merge_entities(intent_result.entities)
         ctx.current_intent = IntentType(intent_result.intent.type)
+
+        # 计算 entities_delta（本轮新增/变更的实体）
+        entities_delta = {}
+        for key, value in ctx.slots.items():
+            if key not in old_slots or old_slots[key] != value:
+                entities_delta[key] = value
 
         # Step 6: 首次 triage 消息记为 chief_complaint
         if intent_result.intent.type == "triage" and ctx.chief_complaint is None:
@@ -231,7 +239,24 @@ class ChatPipeline:
 
         # 保存对话记录
         conversation_service.append_message(conversation_id, user_id, "user", message)
-        conversation_service.append_message(conversation_id, user_id, "assistant", result.message)
+
+        # Bot 回复带元数据
+        bot_metadata = {
+            "intent": ctx.current_intent.value if ctx.current_intent else None,
+            "entities_delta": entities_delta,
+        }
+        if ctx.triage_snapshot and result.metadata.get("triage_level"):
+            bot_metadata["triage_result"] = {
+                "level": ctx.triage_snapshot.level,
+                "reason": ctx.triage_snapshot.reason,
+            }
+        if ctx.danger_signal:
+            bot_metadata["danger_signal"] = ctx.danger_signal
+
+        conversation_service.append_message(
+            conversation_id, user_id, "assistant", result.message,
+            metadata=bot_metadata
+        )
 
         # 安排延迟档案提取
         if transition.action in (Action.MAKE_TRIAGE_DECISION, Action.RUN_RAG_QUERY):
@@ -318,12 +343,21 @@ class ChatPipeline:
 
         ctx.dialogue_state = DialogueState.COLLECTING_SLOTS
 
+        # 获取建议选项
+        options = triage_engine.get_slot_options("symptom")
+
         return PipelineResult(
             conversation_id=ctx.conversation_id,
             message=follow_up,
             metadata={
                 "intent": "slot_filling",
-                "need_follow_up": True
+                "need_follow_up": True,
+                "missing_slots": {
+                    "symptom": {
+                        "label": "主要症状",
+                        "options": options
+                    }
+                }
             },
             need_follow_up=True,
             missing_slots=["symptom"]
@@ -356,12 +390,22 @@ class ChatPipeline:
 
         ctx.dialogue_state = DialogueState.COLLECTING_SLOTS
 
+        # 构建结构化的缺失槽位信息（带建议选项）
+        structured_slots = {}
+        for slot in missing_slots:
+            options = triage_engine.get_slot_options(slot)
+            structured_slots[slot] = {
+                "label": slot,  # 前端有映射表，这里也可以传中文名
+                "options": options
+            }
+
         return PipelineResult(
             conversation_id=ctx.conversation_id,
             message=follow_up,
             metadata={
-                "intent": "triage",
-                "need_follow_up": True
+                "intent": "slot_filling", # 明确为 slot_filling
+                "need_follow_up": True,
+                "missing_slots": structured_slots
             },
             need_follow_up=True,
             missing_slots=missing_slots
@@ -378,11 +422,13 @@ class ChatPipeline:
 
         decision = triage_engine.make_triage_decision(symptom, entities_dict)
 
-        # 更新上下文
+        # 更新上下文：triage_snapshot 一次性写入
         ctx.dialogue_state = DialogueState.TRIAGE_COMPLETE
-        ctx.triage_level = decision.level
-        ctx.triage_reason = decision.reason
-        ctx.triage_action = decision.action
+        ctx.triage_snapshot = TriageSnapshot(
+            level=decision.level,
+            reason=decision.reason,
+            action=decision.action
+        )
 
         response_message = f"**{decision.reason}**\n\n{decision.action}"
         response_message = safety_filter.add_disclaimer(response_message)

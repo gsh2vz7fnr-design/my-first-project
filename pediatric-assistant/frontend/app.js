@@ -669,6 +669,208 @@ function createThinkingBubble() {
 }
 
 /**
+ * Render quick replies for slot filling
+ * @param {Object} metadata - Metadata containing missing_slots
+ */
+function renderQuickReplies(metadata) {
+  showBanner("提示：需要补充关键信息后才能给出更准确建议。", "info");
+  clearComposerProgress();
+
+  // 解析 missing_slots - 兼容数组和对象两种格式
+  let slotKeys = [];
+  let slotDefs = {};
+
+  if (Array.isArray(metadata.missing_slots)) {
+    // 数组格式: ["symptom", "duration"]
+    slotKeys = metadata.missing_slots;
+    slotKeys.forEach(key => {
+      slotDefs[key] = { label: key, options: [] };
+    });
+  } else if (typeof metadata.missing_slots === 'object') {
+    // 对象格式: {"symptom": {"label": "症状", "options": [...]}}
+    slotKeys = Object.keys(metadata.missing_slots);
+    slotDefs = metadata.missing_slots;
+  }
+
+  if (slotKeys.length === 0) {
+    console.warn('[Slot Filling] missing_slots 为空');
+    return;
+  }
+
+  const currentSlotKey = slotKeys[0];
+  const currentSlotDef = slotDefs[currentSlotKey] || {};
+
+  // 获取 label - 多重 fallback
+  const SLOT_LABEL_MAP = {
+    'symptom': '主要症状',
+    'symptoms': '主要症状',
+    'duration': '持续时间',
+    'temperature': '体温',
+    'mental_state': '精神状态',
+    'appetite': '食欲情况',
+    'urine_output': '尿量',
+    'food_intake': '进食情况',
+    'accompanying_symptoms': '伴随症状',
+    'cough_type': '咳嗽类型',
+    'stool_character': '大便性状',
+  };
+  const currentSlotLabel = currentSlotDef.label || SLOT_LABEL_MAP[currentSlotKey] || currentSlotKey || '信息';
+
+  // 获取选项 - 优先后端 options，fallback 到前端预设
+  let chips = [];
+  if (currentSlotDef.options && Array.isArray(currentSlotDef.options) && currentSlotDef.options.length > 0) {
+    chips = currentSlotDef.options.map(opt => {
+      if (typeof opt === 'string') return opt;
+      return opt.label || opt.value;
+    });
+  } else {
+    chips = QUICK_REPLIES_MAP[currentSlotKey] || QUICK_REPLIES_MAP[currentSlotLabel] || [];
+  }
+
+  console.log('[Slot Filling] currentSlotKey:', currentSlotKey, 'label:', currentSlotLabel, 'chips:', chips);
+
+  // 判断是否支持多选（symptom/symptoms/accompanying_symptoms 等支持多选）
+  const MULTI_SELECT_SLOTS = ['symptom', 'symptoms', 'accompanying_symptoms', '伴随症状'];
+  const allowMultiSelect = MULTI_SELECT_SLOTS.includes(currentSlotKey);
+
+  // 创建 Quick Replies 容器
+  const quickRepliesContainer = document.createElement("div");
+  quickRepliesContainer.className = "inline-quick-replies";
+
+  // 提示文字
+  const promptText = document.createElement("div");
+  promptText.className = "inline-quick-replies__prompt";
+  if (allowMultiSelect && chips.length > 0) {
+    promptText.textContent = `请选择${currentSlotLabel}（可多选）：`;
+  } else {
+    promptText.textContent = `请选择或描述${currentSlotLabel}：`;
+  }
+  quickRepliesContainer.appendChild(promptText);
+
+  // 选中的值（多选模式用数组，单选模式用字符串）
+  let selectedValues = [];
+
+  // 快捷按钮
+  if (chips && chips.length > 0) {
+    const chipsWrapper = document.createElement("div");
+    chipsWrapper.className = "inline-quick-replies__chips";
+
+    chips.forEach(chip => {
+      const btn = document.createElement("button");
+      btn.className = "inline-reply-chip";
+      btn.textContent = chip;
+      btn.dataset.value = chip;
+      btn.dataset.selected = "false";
+
+      btn.addEventListener("click", () => {
+        if (allowMultiSelect) {
+          // 多选模式：切换选中状态
+          const isSelected = btn.dataset.selected === "true";
+          if (isSelected) {
+            // 取消选中
+            btn.dataset.selected = "false";
+            btn.classList.remove("selected");
+            selectedValues = selectedValues.filter(v => v !== chip);
+          } else {
+            // 选中
+            btn.dataset.selected = "true";
+            btn.classList.add("selected");
+            selectedValues.push(chip);
+          }
+          // 更新确认按钮状态
+          updateConfirmButtonState();
+        } else {
+          // 单选模式：直接发送
+          appendMessage("user", chip);
+          quickRepliesContainer.remove();
+          clearComposerProgress();
+          sendMessageStream(chip);
+        }
+      });
+
+      chipsWrapper.appendChild(btn);
+    });
+
+    quickRepliesContainer.appendChild(chipsWrapper);
+  }
+
+  // 底部操作区（输入框 + 按钮）
+  const actionWrapper = document.createElement("div");
+  actionWrapper.className = "inline-quick-replies__action-wrapper";
+
+  // 文本输入框（混合模式）
+  const inputWrapper = document.createElement("div");
+  inputWrapper.className = "inline-quick-replies__input-wrapper";
+
+  const textInput = document.createElement("input");
+  textInput.type = "text";
+  textInput.className = "inline-quick-replies__input";
+  textInput.placeholder = chips.length > 0 ? `或手动输入${currentSlotLabel}...` : `请输入${currentSlotLabel}...`;
+
+  // 确认按钮（多选模式显示，或混合输入时使用）
+  const confirmBtn = document.createElement("button");
+  confirmBtn.className = "inline-quick-replies__confirm";
+  confirmBtn.textContent = allowMultiSelect ? "选好了" : "发送";
+
+  // 更新确认按钮状态
+  function updateConfirmButtonState() {
+    const hasInput = textInput.value.trim().length > 0;
+    const hasSelection = selectedValues.length > 0;
+    confirmBtn.disabled = !hasInput && !hasSelection;
+    if (allowMultiSelect && hasSelection) {
+      confirmBtn.textContent = `确认 (${selectedValues.length}项)`;
+    } else {
+      confirmBtn.textContent = allowMultiSelect ? "选好了" : "发送";
+    }
+  }
+
+  textInput.addEventListener("input", updateConfirmButtonState);
+
+  // 发送逻辑
+  function sendValues() {
+    const inputValue = textInput.value.trim();
+    // 合并选中的 chips 和手动输入的内容
+    let allValues = [...selectedValues];
+    if (inputValue) {
+      // 检查是否已包含该值
+      if (!allValues.includes(inputValue)) {
+        allValues.push(inputValue);
+      }
+    }
+
+    if (allValues.length > 0) {
+      const message = allValues.join("、");
+      appendMessage("user", message);
+      quickRepliesContainer.remove();
+      clearComposerProgress();
+      sendMessageStream(message);
+    }
+  }
+
+  confirmBtn.addEventListener("click", sendValues);
+
+  textInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      sendValues();
+    }
+  });
+
+  inputWrapper.appendChild(textInput);
+  actionWrapper.appendChild(inputWrapper);
+  actionWrapper.appendChild(confirmBtn);
+  quickRepliesContainer.appendChild(actionWrapper);
+
+  // 初始化确认按钮状态
+  updateConfirmButtonState();
+
+  // 添加到 chat 末尾（在 assistant 消息之后）
+  chat.appendChild(quickRepliesContainer);
+  forceScrollToBottom();
+  textInput.focus();
+}
+
+/**
  * Send message with streaming output
  * @param {string} text - User message
  * @param {number} retryCount - Current retry attempt
@@ -870,201 +1072,7 @@ async function sendMessageStream(text, retryCount = 0) {
 
               // ===== 在 done 后创建 Quick Replies（确保位置在 assistant 消息之后）=====
               if (metadata && metadata.need_follow_up && metadata.missing_slots) {
-                showBanner("提示：需要补充关键信息后才能给出更准确建议。", "info");
-                clearComposerProgress();
-
-                // 解析 missing_slots - 兼容数组和对象两种格式
-                let slotKeys = [];
-                let slotDefs = {};
-
-                if (Array.isArray(metadata.missing_slots)) {
-                  // 数组格式: ["symptom", "duration"]
-                  slotKeys = metadata.missing_slots;
-                  slotKeys.forEach(key => {
-                    slotDefs[key] = { label: key, options: [] };
-                  });
-                } else if (typeof metadata.missing_slots === 'object') {
-                  // 对象格式: {"symptom": {"label": "症状", "options": [...]}}
-                  slotKeys = Object.keys(metadata.missing_slots);
-                  slotDefs = metadata.missing_slots;
-                }
-
-                if (slotKeys.length === 0) {
-                  console.warn('[Slot Filling] missing_slots 为空');
-                  return;
-                }
-
-                const currentSlotKey = slotKeys[0];
-                const currentSlotDef = slotDefs[currentSlotKey] || {};
-
-                // 获取 label - 多重 fallback
-                const SLOT_LABEL_MAP = {
-                  'symptom': '主要症状',
-                  'symptoms': '主要症状',
-                  'duration': '持续时间',
-                  'temperature': '体温',
-                  'mental_state': '精神状态',
-                  'appetite': '食欲情况',
-                  'urine_output': '尿量',
-                  'food_intake': '进食情况',
-                  'accompanying_symptoms': '伴随症状',
-                  'cough_type': '咳嗽类型',
-                  'stool_character': '大便性状',
-                };
-                const currentSlotLabel = currentSlotDef.label || SLOT_LABEL_MAP[currentSlotKey] || currentSlotKey || '信息';
-
-                // 获取选项 - 优先后端 options，fallback 到前端预设
-                let chips = [];
-                if (currentSlotDef.options && Array.isArray(currentSlotDef.options) && currentSlotDef.options.length > 0) {
-                  chips = currentSlotDef.options.map(opt => {
-                    if (typeof opt === 'string') return opt;
-                    return opt.label || opt.value;
-                  });
-                } else {
-                  chips = QUICK_REPLIES_MAP[currentSlotKey] || QUICK_REPLIES_MAP[currentSlotLabel] || [];
-                }
-
-                console.log('[Slot Filling] currentSlotKey:', currentSlotKey, 'label:', currentSlotLabel, 'chips:', chips);
-
-                // 判断是否支持多选（symptom/symptoms/accompanying_symptoms 等支持多选）
-                const MULTI_SELECT_SLOTS = ['symptom', 'symptoms', 'accompanying_symptoms', '伴随症状'];
-                const allowMultiSelect = MULTI_SELECT_SLOTS.includes(currentSlotKey);
-
-                // 创建 Quick Replies 容器
-                const quickRepliesContainer = document.createElement("div");
-                quickRepliesContainer.className = "inline-quick-replies";
-
-                // 提示文字
-                const promptText = document.createElement("div");
-                promptText.className = "inline-quick-replies__prompt";
-                if (allowMultiSelect && chips.length > 0) {
-                  promptText.textContent = `请选择${currentSlotLabel}（可多选）：`;
-                } else {
-                  promptText.textContent = `请选择或描述${currentSlotLabel}：`;
-                }
-                quickRepliesContainer.appendChild(promptText);
-
-                // 选中的值（多选模式用数组，单选模式用字符串）
-                let selectedValues = [];
-
-                // 快捷按钮
-                if (chips && chips.length > 0) {
-                  const chipsWrapper = document.createElement("div");
-                  chipsWrapper.className = "inline-quick-replies__chips";
-
-                  chips.forEach(chip => {
-                    const btn = document.createElement("button");
-                    btn.className = "inline-reply-chip";
-                    btn.textContent = chip;
-                    btn.dataset.value = chip;
-                    btn.dataset.selected = "false";
-
-                    btn.addEventListener("click", () => {
-                      if (allowMultiSelect) {
-                        // 多选模式：切换选中状态
-                        const isSelected = btn.dataset.selected === "true";
-                        if (isSelected) {
-                          // 取消选中
-                          btn.dataset.selected = "false";
-                          btn.classList.remove("selected");
-                          selectedValues = selectedValues.filter(v => v !== chip);
-                        } else {
-                          // 选中
-                          btn.dataset.selected = "true";
-                          btn.classList.add("selected");
-                          selectedValues.push(chip);
-                        }
-                        // 更新确认按钮状态
-                        updateConfirmButtonState();
-                      } else {
-                        // 单选模式：直接发送
-                        appendMessage("user", chip);
-                        quickRepliesContainer.remove();
-                        clearComposerProgress();
-                        sendMessageStream(chip);
-                      }
-                    });
-
-                    chipsWrapper.appendChild(btn);
-                  });
-
-                  quickRepliesContainer.appendChild(chipsWrapper);
-                }
-
-                // 底部操作区（输入框 + 按钮）
-                const actionWrapper = document.createElement("div");
-                actionWrapper.className = "inline-quick-replies__action-wrapper";
-
-                // 文本输入框（混合模式）
-                const inputWrapper = document.createElement("div");
-                inputWrapper.className = "inline-quick-replies__input-wrapper";
-
-                const textInput = document.createElement("input");
-                textInput.type = "text";
-                textInput.className = "inline-quick-replies__input";
-                textInput.placeholder = chips.length > 0 ? `或手动输入${currentSlotLabel}...` : `请输入${currentSlotLabel}...`;
-
-                // 确认按钮（多选模式显示，或混合输入时使用）
-                const confirmBtn = document.createElement("button");
-                confirmBtn.className = "inline-quick-replies__confirm";
-                confirmBtn.textContent = allowMultiSelect ? "选好了" : "发送";
-
-                // 更新确认按钮状态
-                function updateConfirmButtonState() {
-                  const hasInput = textInput.value.trim().length > 0;
-                  const hasSelection = selectedValues.length > 0;
-                  confirmBtn.disabled = !hasInput && !hasSelection;
-                  if (allowMultiSelect && hasSelection) {
-                    confirmBtn.textContent = `确认 (${selectedValues.length}项)`;
-                  } else {
-                    confirmBtn.textContent = allowMultiSelect ? "选好了" : "发送";
-                  }
-                }
-
-                textInput.addEventListener("input", updateConfirmButtonState);
-
-                // 发送逻辑
-                function sendValues() {
-                  const inputValue = textInput.value.trim();
-                  // 合并选中的 chips 和手动输入的内容
-                  let allValues = [...selectedValues];
-                  if (inputValue) {
-                    // 检查是否已包含该值
-                    if (!allValues.includes(inputValue)) {
-                      allValues.push(inputValue);
-                    }
-                  }
-
-                  if (allValues.length > 0) {
-                    const message = allValues.join("、");
-                    appendMessage("user", message);
-                    quickRepliesContainer.remove();
-                    clearComposerProgress();
-                    sendMessageStream(message);
-                  }
-                }
-
-                confirmBtn.addEventListener("click", sendValues);
-
-                textInput.addEventListener("keydown", (e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    sendValues();
-                  }
-                });
-
-                inputWrapper.appendChild(textInput);
-                actionWrapper.appendChild(inputWrapper);
-                actionWrapper.appendChild(confirmBtn);
-                quickRepliesContainer.appendChild(actionWrapper);
-
-                // 初始化确认按钮状态
-                updateConfirmButtonState();
-
-                // 添加到 chat 末尾（在 assistant 消息之后）
-                chat.appendChild(quickRepliesContainer);
-                forceScrollToBottom();
-                textInput.focus();
+                renderQuickReplies(metadata);
               } else {
                 // 无 follow-up 时正常滚动
                 forceScrollToBottom();

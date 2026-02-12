@@ -1,6 +1,7 @@
 """
 对话历史服务 - SQLite 存储
 """
+import json
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -41,10 +42,20 @@ class ConversationService:
                     user_id TEXT,
                     role TEXT,
                     content TEXT,
+                    metadata TEXT,
                     created_at TEXT
                 )
                 """
             )
+
+            # 兼容旧表：如果表已存在但缺少 metadata 列，补充添加
+            try:
+                conn.execute(
+                    "ALTER TABLE conversation_messages ADD COLUMN metadata TEXT"
+                )
+                conn.commit()
+            except sqlite3.OperationalError:
+                pass  # 列已存在，忽略
 
             # Conversations metadata table
             conn.execute(
@@ -62,17 +73,19 @@ class ConversationService:
 
             conn.commit()
 
-    def append_message(self, conversation_id: str, user_id: str, role: str, content: str) -> None:
+    def append_message(self, conversation_id: str, user_id: str, role: str, content: str, metadata: Optional[Dict] = None) -> None:
         """追加消息"""
+        metadata_json = json.dumps(metadata, ensure_ascii=False) if metadata else None
+
         with self._connect() as conn:
             # Insert message
             conn.execute(
                 """
                 INSERT INTO conversation_messages (
-                    conversation_id, user_id, role, content, created_at
-                ) VALUES (?, ?, ?, ?, ?)
+                    conversation_id, user_id, role, content, metadata, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (conversation_id, user_id, role, content, datetime.now().isoformat()),
+                (conversation_id, user_id, role, content, metadata_json, datetime.now().isoformat()),
             )
 
             # Update or create conversation metadata

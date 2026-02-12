@@ -82,6 +82,12 @@ app.include_router(chat.router, prefix="/api/v1/chat", tags=["对话"])
 app.include_router(profile.router, prefix="/api/v1/profile", tags=["健康档案"])
 
 
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    """避免浏览器请求 favicon.ico 时报错"""
+    return JSONResponse(content={}, status_code=204)
+
+
 @app.get("/")
 async def root():
     """根路径"""
