@@ -502,7 +502,33 @@ async function loadHistory() {
 }
 
 async function loadConversations() {
-  const userId = CURRENT_USER_ID;
+  // 🎨 软登录检查：优先检查 localStorage 中的用户 ID
+  const userId = localStorage.getItem('pediatric_user_id');
+
+  if (!userId) {
+    // 没有用户 ID，显示登录遮罩层
+    const loginModal = document.getElementById('login-modal');
+    loginModal.classList.add('show');
+
+    // 暂停其他初始化，等待用户登录
+    console.log('[LOGIN] No user ID found, showing login modal');
+    return;
+  }
+
+  // 验证并使用用户 ID
+  if (userId !== CURRENT_USER_ID) {
+    console.warn('[LOGIN] User ID mismatch, updating:', userId);
+    CURRENT_USER_ID = userId;
+  }
+
+  console.log('[LOGIN] User authenticated:', CURRENT_USER_ID);
+
+  // 隐藏登录 Modal（如果存在）
+  const loginModal = document.getElementById('login-modal');
+  if (loginModal) {
+    loginModal.classList.remove('show');
+  }
+
   try {
     const response = await fetch(`${API_BASE}/api/v1/chat/conversations/${userId}`);
     if (!response.ok) throw new Error("请求失败");
@@ -1272,6 +1298,105 @@ function showHealthError(message) {
     retryBtn.addEventListener("click", loadHealthData);
   }
 }
+
+// ============ 🎨 软登录功能 ============
+
+/**
+ * 初始化登录功能
+ */
+function initLoginFeature() {
+  const loginInput = document.getElementById('login-input');
+  const loginButton = document.getElementById('login-button');
+
+  // 登录按钮点击事件
+  loginButton.addEventListener('click', handleLoginSubmit);
+
+  // 输入框回车事件
+  loginInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      handleLoginSubmit();
+    }
+  });
+
+  // 输入框输入事件（实时清理）
+  loginInput.addEventListener('input', (event) => {
+    const value = event.target.value.trim();
+    // 移除空格和特殊字符，只保留字母、数字、下划线
+    const cleaned = value.replace(/[^a-zA-Z0-9\-]/g, '');
+    event.target.value = cleaned;
+  });
+}
+
+/**
+ * 处理登录提交
+ */
+async function handleLoginSubmit() {
+  const loginInput = document.getElementById('login-input');
+  const userId = loginInput.value.trim();
+
+  if (!userId) {
+    alert('请输入邮箱或昵称');
+    return;
+  }
+
+  // 简单清理（去除首尾空格、转小写）
+  let cleanedUserId = userId.trim().toLowerCase().replace(/\s+/g, '');
+
+  // 生成简单的用户ID（可以根据需要改为 UUID）
+  const generatedUserId = 'user_' + cleanedUserId.replace(/[^a-z0-9]/g, '');
+
+  try {
+    const response = await fetch(`${API_BASE}/api/v1/profile/validate-user`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user_id: generatedUserId
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error('验证请求失败');
+    }
+
+    const result = await response.json();
+
+    if (result.code !== 0 || !result.data.valid) {
+      alert(result.data.message || '用户ID 已存在或无效');
+      return;
+    }
+
+    // 保存到 localStorage
+    localStorage.setItem('pediatric_user_id', generatedUserId);
+
+    // 更新全局常量
+    CURRENT_USER_ID = generatedUserId;
+
+    console.log('[LOGIN] User logged in:', generatedUserId);
+
+    // 隐藏登录 Modal
+    const loginModal = document.getElementById('login-modal');
+    loginModal.classList.remove('show');
+
+    // 重新加载对话列表（使用新的 user_id）
+    await loadConversations();
+
+    // 显示成功提示
+    showBanner(`欢迎回来，${cleanedUserId}！`, 'success');
+  } catch (err) {
+    console.error('[LOGIN] Login failed:', err);
+    alert('登录失败，请重试');
+  }
+}
+
+// 页面加载时初始化登录功能
+document.addEventListener('DOMContentLoaded', () => {
+  // 延迟执行，确保 DOM 已完全加载
+  setTimeout(() => {
+    initLoginFeature();
+  }, 100);
+});
+
+// ============ 🎨 软登录功能 ============
 
 // 显示空状态（无成员）
 function showEmptyMemberState() {

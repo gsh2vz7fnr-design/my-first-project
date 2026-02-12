@@ -95,7 +95,8 @@
       "Bash(ps:*)",
       "Bash(pkill:*)",
       "Bash(venv/bin/python:*)",
-      "Bash(head:*)"
+      "Bash(head:*)",
+      "Bash(git checkout:*)"
     ]
   }
 }

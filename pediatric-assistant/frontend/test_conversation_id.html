@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>测试 conversation_id 传递</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        h1 {
+            color: #333;
+        border-bottom: 2px solid #ddd;
+            padding-bottom: 10px;
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 15px;
+            background: white;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        #log {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 3px;
+            padding: 10px;
+            margin-top: 10px;
+            font-family: monospace;
+            font-size: 12px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .log-entry {
+            margin: 5px 0;
+            padding: 5px;
+            border-bottom: 1px solid #eee;
+        }
+        .log-entry.info {
+            color: #007bff;
+        }
+        .log-entry.error {
+            color: #dc3545;
+        }
+        .log-entry.success {
+            color: #28a745;
+        }
+        .timestamp {
+            color: #6c757d;
+            font-size: 11px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🧪 conversation_id 传递测试</h1>
+
+    <div class="test-section">
+        <h3>测试 1：第一轮（不传 conversation_id）</h3>
+        <p>预期：创建新会话，返回新的 conversation_id</p>
+        <button onclick="test1()">发送：宝宝8个月</button>
+    </div>
+
+    <div class="test-section">
+        <h3>测试 2：第二轮（传递第一轮的 conversation_id）</h3>
+        <p>预期：使用同一会话，Turn 2</p>
+        <button onclick="test2()">发送：发烧38.5度，伴有咳嗽</button>
+    </div>
+
+    <div class="test-section">
+        <h3>测试 3：第三轮（传递第一轮的 conversation_id）</h3>
+        <p>预期：使用同一会话，Turn 3</p>
+        <button onclick="test3()">发送：1天</button>
+    </div>
+
+    <div id="log"></div>
+
+    <script>
+        const API_BASE = 'http://localhost:8000/api/v1/chat/stream';
+        let conversationId = null;
+
+        function addLog(message, type = 'info') {
+            const logDiv = document.getElementById('log');
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${type}`;
+            entry.innerHTML = `<span class="timestamp">[${new Date().toLocaleTimeString()}]</span> ${message}`;
+            logDiv.appendChild(entry);
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        async function test1() {
+            addLog('📝 测试 1：发送"宝宝8个月"，不传 conversation_id');
+
+            const response = await fetch(API_BASE, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    user_id: 'test_user',
+                    message: '宝宝8个月'
+                })
+            });
+
+            const data = await response.json();
+            conversationId = data.data?.conversation_id || data.conversation_id;
+
+            addLog(`✅ 第一轮响应：conversation_id = ${conversationId}`, 'success');
+            addLog(`   返回的完整数据：${JSON.stringify(data.data, null, 2)}`, 'info');
+        }
+
+        async function test2() {
+            addLog(`📝 测试 2：发送"发烧38.5度，伴有咳嗽"，传递 conversation_id = ${conversationId}`);
+
+            if (!conversationId) {
+                addLog('❌ 错误：conversationId 为空，请先运行测试1', 'error');
+                return;
+            }
+
+            const response = await fetch(API_BASE, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    user_id: 'test_user',
+                    conversation_id: conversationId,
+                    message: '发烧38.5度，伴有咳嗽'
+                })
+            });
+
+            const data = await response.json();
+            const newConversationId = data.data?.conversation_id || data.conversation_id;
+
+            addLog(`✅ 第二轮响应：conversation_id = ${newConversationId}`, 'success');
+
+            if (newConversationId === conversationId) {
+                addLog(`✅ SUCCESS: conversation_id 保持一致：${conversationId}`, 'success');
+            } else {
+                addLog(`❌ FAIL: conversation_id 不一致`, 'error');
+                addLog(`   发送的：${conversationId}`, 'error');
+                addLog(`   返回的：${newConversationId}`, 'error');
+            }
+        }
+
+        async function test3() {
+            addLog(`📝 测试 3：发送"1天"，传递 conversation_id = ${conversationId}`);
+
+            if (!conversationId) {
+                addLog('❌ 错误：conversationId 为空，请先运行测试1和2', 'error');
+                return;
+            }
+
+            const response = await fetch(API_BASE, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    user_id: 'test_user',
+                    conversation_id: conversationId,
+                    message: '1天'
+                })
+            });
+
+            const data = await response.json();
+            const newConversationId = data.data?.conversation_id || data.conversation_id;
+
+            addLog(`✅ 第三轮响应：conversation_id = ${newConversationId}`, 'success');
+
+            if (newConversationId === conversationId) {
+                addLog(`✅ SUCCESS: conversation_id 保持一致：${conversationId}`, 'success');
+            } else {
+                addLog(`❌ FAIL: conversation_id 不一致`, 'error');
+                addLog(`   发送的：${conversationId}`, 'error');
+                addLog(`   返回的：${newConversationId}`, 'error');
+            }
+        }
+    </script>
+</body>
+</html>
