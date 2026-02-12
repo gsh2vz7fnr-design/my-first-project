@@ -15,6 +15,7 @@ ChatPipeline 将原来分散在路由层中的逻辑整合成一个清晰的流�
 10. 状态机决定 action → 执行 action → 持久化
 """
 import uuid
+import json  # ✅ 添加 json 模块导入
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, AsyncGenerator
 from datetime import datetime
