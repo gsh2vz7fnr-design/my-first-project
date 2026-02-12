@@ -10,6 +10,7 @@ from openai import OpenAI
 
 from app.config import settings
 from app.models.user import IntentAndEntities, Intent
+from app.utils.logger import get_logger
 
 
 class LLMService:
@@ -25,6 +26,7 @@ class LLMService:
         self.model = settings.DEEPSEEK_MODEL
         self._api_key_configured = bool(settings.DEEPSEEK_API_KEY)
         self._remote_cooldown_until: float = 0.0
+        self.log = get_logger("LLMService")
 
     @property
     def remote_available(self) -> bool:
@@ -42,7 +44,8 @@ class LLMService:
     async def extract_intent_and_entities(
         self,
         user_input: str,
-        context: Optional[Dict[str, Any]] = None
+        context: Optional[Dict[str, Any]] = None,
+        accumulated_slots: Optional[Dict[str, Any]] = None
     ) -> IntentAndEntities:
         """
         提取用户意图和症状实体
@@ -50,18 +53,20 @@ class LLMService:
         Args:
             user_input: 用户输入
             context: 上下文信息（健康档案等）
+            accumulated_slots: 前几轮已累积的实体（让 LLM 知道已收集了什么）
 
         Returns:
             IntentAndEntities: 意图和实体
         """
         # 构建提示词
         system_prompt = self._build_intent_extraction_prompt()
-        user_prompt = self._build_user_prompt(user_input, context)
+        user_prompt = self._build_user_prompt(user_input, context, accumulated_slots)
 
         if not self.remote_available:
             return self._extract_intent_and_entities_fallback(user_input)
 
         try:
+            self.log.debug("LLM Request | model={} | prompt={}", self.model, user_prompt[:200])
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -72,11 +77,12 @@ class LLMService:
             )
 
             content = response.choices[0].message.content
+            self.log.debug("LLM Response | raw={}", content)
             result = json.loads(content)
             return self._normalize_intent_entities(result, user_input=user_input)
 
         except Exception as e:
-            logger.error("意图提取失败: {}", e, exc_info=True)
+            self.log.error("意图提取失败: {}", e, exc_info=True)
             self.remote_available = False
             return self._extract_intent_and_entities_fallback(user_input)
 
@@ -369,8 +375,8 @@ class LLMService:
 5. duration 要保留原始表述（如 "刚刚发现"、"半天"、"1天"、"2-3天"）
 6. mental_state 要标准化为：正常玩耍、精神差、嗜睡、烦躁不安 等"""
 
-    def _build_user_prompt(self, user_input: str, context: Optional[Dict[str, Any]]) -> str:
-        """构建用户提示词"""
+    def _build_user_prompt(self, user_input: str, context: Optional[Dict[str, Any]], accumulated_slots: Optional[Dict[str, Any]] = None) -> str:
+        """构建用户提示词（包含累积上下文）"""
         prompt = f"用户输入：{user_input}\n\n"
 
         if context and context.get("baby_info"):
@@ -382,7 +388,16 @@ class LLMService:
                 prompt += f"- 体重：{baby_info['weight_kg']}kg\n"
             prompt += "\n"
 
-        prompt += "请提取意图和实体："
+        # 注入前几轮已累积的实体，让 LLM 知道上下文
+        if accumulated_slots:
+            prompt += "前几轮已收集的信息：\n"
+            for k, v in accumulated_slots.items():
+                prompt += f"- {k}: {v}\n"
+            prompt += "\n请基于以上已知信息，从本轮用户输入中提取**新增**的意图和实体。已有信息无需重复提取。\n"
+        else:
+            prompt += "这是用户的首轮输入，请尽可能提取所有信息。\n"
+
+        prompt += "\n请提取意图和实体："
         return prompt
 
     def _build_profile_extraction_prompt(self) -> str:
@@ -454,11 +469,12 @@ class LLMService:
         symptom_map = [
             "发烧", "发热", "高烧",
             "摔倒", "摔伤", "跌倒", "跌落",
-            "呕吐", "吐奶",
-            "腹泻", "拉肚子", "拉稀",
+            "呕吐", "吐", "吐奶",  # 添加"吐"以匹配"吐了"
+            "腹泻", "拉肚子", "拉稀", "拉",  # 添加"拉"以匹配"拉了"
             "咳嗽", "咳",
             "皮疹", "起疹子", "湿疹",
-            "哭闹",
+            "哭闹", "哭闹不安",
+            "流鼻涕", "鼻塞", "流涕",
             "惊厥", "抽搐", "呼吸困难", "昏迷", "吞异物", "误吞",
             "便秘"
         ]
@@ -475,20 +491,108 @@ class LLMService:
 
         entities: Dict[str, Any] = {}
 
-        for symptom in [
-            "发烧", "发热", "高烧",
-            "摔倒", "摔伤", "跌倒", "跌落",
-            "呕吐", "吐奶",
-            "腹泻", "拉肚子", "拉稀",
-            "咳嗽", "咳",
-            "皮疹", "起疹子", "湿疹",
-            "哭闹",
-            "惊厥", "抽搐", "呼吸困难", "昏迷", "吞异物", "误吞",
-            "便秘"
-        ]:
-            if symptom in user_input:
-                entities["symptom"] = symptom
-                break
+        # 提取所有匹配的症状
+        matched_symptoms = []
+        # 首先检查是否为纯顿号分隔的症状列表（前端多选格式）
+        # 判断标准：整个输入只包含顿号分隔的症状，没有其他描述性文字
+        is_pure_list = True
+        if "、" in user_input:
+            parts = [part.strip() for part in user_input.split("、") if part.strip()]
+            # 检查每个部分是否都是纯症状（没有其他描述性文字）
+            symptom_list = [
+                "发烧", "发热", "高烧",
+                "摔倒", "摔伤", "跌倒", "跌落",
+                "呕吐", "吐奶",
+                "腹泻", "拉肚子", "拉稀",
+                "咳嗽", "咳",
+                "皮疹", "起疹子", "湿疹",
+                "哭闹", "哭闹不安",
+                "流鼻涕", "鼻塞", "流涕",
+                "惊厥", "抽搐", "呼吸困难", "昏迷", "吞异物", "误吞",
+                "便秘"
+            ]
+            for part in parts:
+                # 只有当部分完全匹配症状列表时才认为是纯列表
+                if part not in symptom_list:
+                    # 尝试归一化后匹配
+                    normalized = self._normalize_symptom(part)
+                    if normalized not in symptom_list:
+                        is_pure_list = False
+                        break
+
+            # 只有纯列表格式才使用顿号分隔逻辑
+            if is_pure_list:
+                for part in parts:
+                    normalized_symptom = self._normalize_symptom(part)
+                    if normalized_symptom not in matched_symptoms:
+                        matched_symptoms.append(normalized_symptom)
+
+        # 如果没有找到顿号分隔的症状，按原逻辑搜索
+        if not matched_symptoms:
+            for symptom in [
+                "发烧", "发热", "高烧",
+                "摔倒", "摔伤", "跌倒", "跌落",
+                "呕吐", "吐奶",
+                "腹泻", "拉肚子", "拉稀",
+                "咳嗽", "咳",
+                "皮疹", "起疹子", "湿疹",
+                "哭闹", "哭闹不安",
+                "流鼻涕", "鼻塞", "流涕",
+                "惊厥", "抽搐", "呼吸困难", "昏迷", "吞异物", "误吞",
+                "便秘"
+            ]:
+                if symptom in user_input:
+                    normalized_symptom = self._normalize_symptom(symptom)
+                    if normalized_symptom not in matched_symptoms:
+                        matched_symptoms.append(normalized_symptom)
+
+        if matched_symptoms:
+            # 按照优先级排序症状（优先级数字小的更严重，应该作为主要症状）
+            matched_symptoms.sort(key=lambda s: self._get_symptom_priority(s))
+            # 优先级最高的症状作为主要症状
+            entities["symptom"] = matched_symptoms[0]
+            # 如果有多个症状，其余作为伴随症状
+            if len(matched_symptoms) > 1:
+                # 合并伴随症状，过滤掉主要症状
+                main_symptom_normalized = self._normalize_symptom(matched_symptoms[0])
+                accompanying = []
+                for symptom in matched_symptoms[1:]:
+                    normalized_symptom = self._normalize_symptom(symptom)
+                    # 检查是否与主要症状相同
+                    if normalized_symptom != main_symptom_normalized:
+                        # 检查是否已在伴随症状中
+                        if normalized_symptom not in accompanying:
+                            accompanying.append(normalized_symptom)
+
+                # 合并已有的伴随症状
+                existing_accompanying = entities.get("accompanying_symptoms", "")
+                if existing_accompanying:
+                    # 将字符串转换为列表
+                    if isinstance(existing_accompanying, str):
+                        existing_list = [s.strip() for s in existing_accompanying.split("，") if s.strip()]
+                    else:
+                        existing_list = []
+
+                    # 归一化所有症状
+                    normalized_existing = [self._normalize_symptom(s) for s in existing_list]
+                    normalized_accompanying = [self._normalize_symptom(s) for s in accompanying]
+
+                    # 去重合并
+                    all_accompanying = []
+                    for symptom in normalized_existing + normalized_accompanying:
+                        if symptom not in all_accompanying:
+                            all_accompanying.append(symptom)
+
+                    entities["accompanying_symptoms"] = "，".join(all_accompanying)
+                else:
+                    # 归一化伴随症状
+                    normalized_accompanying = [self._normalize_symptom(s) for s in accompanying]
+                    # 去重
+                    unique_accompanying = []
+                    for symptom in normalized_accompanying:
+                        if symptom not in unique_accompanying:
+                            unique_accompanying.append(symptom)
+                    entities["accompanying_symptoms"] = "，".join(unique_accompanying)
 
         # 增强年龄提取 - 支持多种格式
         # "8个月", "8 个月", "8月", "8月大", "8个月大", "宝宝8个月", "2岁", "两岁半"
@@ -498,9 +602,11 @@ class LLMService:
             r"(\d+)月(?:大|龄)?",         # 8月大, 8月龄
             r"(\d+)\s*岁(?:半)?",          # 2岁, 2岁半
             r"(一|两|三|四|五|六)\s*岁(?:半)?", # 两岁, 两岁半
+            r"([一二三四五六七八九十])\s*个?月(?:龄|大)?", # 八个月, 六个月
+            r"宝宝.*?([一二三四五六七八九十])\s*个?月", # 宝宝八个月
         ]
-        
-        cn_num_map = {"一": 1, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6}
+
+        cn_num_map = {"一": 1, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
 
         for pattern in age_patterns:
             age_match = re.search(pattern, user_input)
@@ -525,24 +631,32 @@ class LLMService:
                 break
 
         # 增强体温提取 - 支持更多格式
-        # "38.5度", "38.5℃", "发烧38.5", "体温38.5"
+        # "38.5度", "38.5℃", "发烧38.5", "体温38.5", "38度5"
         temp_patterns = [
+            r"(\d+)\s*度\s*(\d+)",  # 优先处理 "38度5" 格式，避免被 "38度" 先匹配
             r"(\d+(?:\.\d+)?)\s*(?:度|℃|°c)",
             r"(?:发烧|体温|烧到?)[是为]?\s*(\d+(?:\.\d+)?)",
         ]
         for pattern in temp_patterns:
             temp_match = re.search(pattern, user_input, re.IGNORECASE)
             if temp_match:
-                temp_value = temp_match.group(1)
+                if temp_match.lastindex >= 2:  # 如果有两个捕获组（如 38度5）
+                    # 合并为小数
+                    whole = temp_match.group(1)
+                    decimal = temp_match.group(2)
+                    temp_value = f"{whole}.{decimal}"
+                else:
+                    temp_value = temp_match.group(1)
                 if float(temp_value) > 30 and float(temp_value) < 45:  # 合理体温范围
                     entities["temperature"] = f"{temp_value}度"
                 break
 
         # 增强持续时间提取
-        # "1天", "两天", "半天", "3小时", "刚刚发现"
+        # "1天", "两天", "半天", "3小时", "刚刚发现", "昨天开始", "从前天起"
         duration_patterns = [
             r"(刚刚发现|刚开始|刚发现)",
             r"(半天|大半天)",
+            r"(?:从?)(昨天|前天|今天|今早|昨晚|前天晚上)(?:开始|起)?",
             r"(\d+)\s*(?:天|日)",
             r"(一两|两三|\d+[-~]\d+)\s*天",
             r"(\d+)\s*(?:小时|个?钟头)",
@@ -578,16 +692,48 @@ class LLMService:
                 break
 
         accompany = []
-        for k in ["咳嗽", "呕吐", "皮疹", "腹泻", "抽搐", "呼吸困难", "昏迷", "发烧"]:
+        main_symptom = entities.get("symptom", "")
+        main_symptom_normalized = self._normalize_symptom(main_symptom) if main_symptom else ""
+        for k in ["咳嗽", "呕吐", "皮疹", "腹泻", "抽搐", "呼吸困难", "昏迷", "发烧", "流鼻涕", "鼻塞", "流涕", "哭闹", "哭闹不安"]:
             if k in user_input:
-                accompany.append(k)
+                normalized_k = self._normalize_symptom(k)
+                if normalized_k != main_symptom_normalized:
+                    accompany.append(k)
         if accompany:
-            entities["accompanying_symptoms"] = "，".join(sorted(set(accompany)))
+            # 合并到已有的伴随症状
+            existing_accompanying = entities.get("accompanying_symptoms", "")
+            if existing_accompanying:
+                # 将字符串转换为列表
+                if isinstance(existing_accompanying, str):
+                    existing_list = [s.strip() for s in existing_accompanying.split("，") if s.strip()]
+                else:
+                    existing_list = []
+
+                # 归一化所有症状
+                normalized_existing = [self._normalize_symptom(s) for s in existing_list]
+                normalized_accompany = [self._normalize_symptom(s) for s in accompany]
+
+                # 去重合并
+                all_accompanying = []
+                for symptom in normalized_existing + normalized_accompany:
+                    if symptom not in all_accompanying:
+                        all_accompanying.append(symptom)
+
+                entities["accompanying_symptoms"] = "，".join(sorted(all_accompanying))
+            else:
+                # 归一化伴随症状
+                normalized_accompany = [self._normalize_symptom(s) for s in accompany]
+                # 去重
+                unique_accompanying = []
+                for symptom in normalized_accompany:
+                    if symptom not in unique_accompanying:
+                        unique_accompanying.append(symptom)
+                entities["accompanying_symptoms"] = "，".join(sorted(unique_accompanying))
 
         if any(k in user_input for k in ["床", "沙发", "楼梯", "高处"]):
             entities["fall_height"] = "高处"
 
-        freq_match = re.search(r"(每小时|每天|一天)\s*\d+次", user_input)
+        freq_match = re.search(r"(每小时|每天|一天).{0,15}?\d+\s*次", user_input)
         if freq_match:
             entities["frequency"] = freq_match.group(0)
 
@@ -662,6 +808,43 @@ class LLMService:
             entities=entities
         )
 
+    def _get_symptom_priority(self, symptom: str) -> int:
+        """获取症状优先级（数字越小优先级越高）"""
+        priority_map = {
+            "惊厥": 1,
+            "抽搐": 1,
+            "呼吸困难": 1,
+            "昏迷": 1,
+            "吞异物": 1,
+            "误吞": 1,
+            "发烧": 2,
+            "发热": 2,
+            "高烧": 2,
+            "摔倒": 3,
+            "摔伤": 3,
+            "跌倒": 3,
+            "跌落": 3,
+            "呕吐": 4,
+            "吐奶": 4,
+            "腹泻": 5,
+            "拉肚子": 5,
+            "拉稀": 5,
+            "咳嗽": 6,
+            "咳": 6,
+            "皮疹": 7,
+            "起疹子": 7,
+            "湿疹": 7,
+            "流鼻涕": 8,
+            "鼻塞": 8,
+            "流涕": 8,
+            "哭闹": 9,
+            "哭闹不安": 9,
+            "便秘": 10
+        }
+        # 归一化症状
+        normalized = self._normalize_symptom(symptom)
+        return priority_map.get(normalized, 99)
+
     def _normalize_symptom(self, symptom: str) -> str:
         """症状同义词归一化"""
         mapping = {
@@ -677,7 +860,10 @@ class LLMService:
             "拉稀": "腹泻",
             "吐奶": "呕吐",
             "起疹子": "皮疹",
-            "湿疹": "皮疹"
+            "湿疹": "皮疹",
+            "鼻塞": "流鼻涕",
+            "流涕": "流鼻涕",
+            "哭闹不安": "哭闹"
         }
         for key, value in mapping.items():
             if key in symptom:
@@ -699,11 +885,51 @@ class LLMService:
                 entities["symptom"] = "发烧"
 
         if "拉肚子" in text or "腹泻" in text:
-            entities["symptom"] = "腹泻"
+            # 只有当主症状为空或优先级更低时才设置腹泻为主症状
+            current_symptom = entities.get("symptom")
+            diarrhea_priority = self._get_symptom_priority("腹泻")
+            if not current_symptom:
+                entities["symptom"] = "腹泻"
+            elif self._get_symptom_priority(current_symptom) > diarrhea_priority:
+                # 当前症状优先级更低（数字更大），则用腹泻覆盖
+                entities["symptom"] = "腹泻"
+
+        if "流鼻涕" in text or "鼻塞" in text or "流涕" in text:
+            if not symptom:
+                entities["symptom"] = "流鼻涕"
+            elif symptom != "流鼻涕":
+                # 添加到伴随症状
+                existing = entities.get("accompanying_symptoms", "")
+                if "流鼻涕" not in existing and "鼻塞" not in existing and "流涕" not in existing:
+                    if existing:
+                        entities["accompanying_symptoms"] = existing + "，流鼻涕"
+                    else:
+                        entities["accompanying_symptoms"] = "流鼻涕"
+
+        if "哭闹" in text or "哭闹不安" in text:
+            if not symptom:
+                entities["symptom"] = "哭闹"
+            elif symptom != "哭闹":
+                # 添加到伴随症状
+                existing = entities.get("accompanying_symptoms", "")
+                if "哭闹" not in existing and "哭闹不安" not in existing:
+                    if existing:
+                        entities["accompanying_symptoms"] = existing + "，哭闹"
+                    else:
+                        entities["accompanying_symptoms"] = "哭闹"
 
         # 修复 Bug #2: 追加前检查是否已包含，避免重复
         if "呕吐" in text or "吐" in text:
-            if entities.get("symptom") != "呕吐":
+            current_symptom = entities.get("symptom")
+            vomiting_priority = self._get_symptom_priority("呕吐")
+            # 如果主症状为空或优先级更低，设置呕吐为主症状
+            if not current_symptom:
+                entities["symptom"] = "呕吐"
+            elif current_symptom != "呕吐" and self._get_symptom_priority(current_symptom) > vomiting_priority:
+                # 当前症状优先级更低，用呕吐替换
+                entities["symptom"] = "呕吐"
+            elif current_symptom != "呕吐":
+                # 添加到伴随症状
                 existing = entities.get("accompanying_symptoms", "")
                 if "呕吐" not in existing:
                     if existing:

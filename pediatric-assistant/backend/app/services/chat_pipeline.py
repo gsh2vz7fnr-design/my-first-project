@@ -21,6 +21,8 @@ from datetime import datetime
 from loguru import logger
 import asyncio
 
+from app.utils.logger import get_logger, set_session_id
+
 from app.models.medical_context import (
     MedicalContext,
     DialogueState,
@@ -83,7 +85,9 @@ class PipelineResult:
         # 添加追问相关字段
         if self.need_follow_up:
             response["data"]["metadata"]["need_follow_up"] = True
-            if self.missing_slots:
+            if self.missing_slots and "missing_slots" not in self.metadata:
+                # 只有当metadata中还没有missing_slots时才添加简单列表
+                # 如果metadata中已经有missing_slots（如structured_slots），则保留它
                 response["data"]["metadata"]["missing_slots"] = self.missing_slots
 
         return response
@@ -121,6 +125,7 @@ class ChatPipeline:
     def __init__(self):
         """初始化"""
         self._rag_service = None
+        self.log = get_logger("ChatPipeline")
 
     @property
     def rag_service(self):
@@ -148,8 +153,10 @@ class ChatPipeline:
         """
         # Step 1: 解析 conversation_id，加载/创建 MedicalContext
         conversation_id = conversation_id or f"conv_{uuid.uuid4().hex[:12]}"
+        set_session_id(conversation_id)  # 注入日志上下文
         ctx = conversation_state_service.load_medical_context(conversation_id, user_id)
         ctx.increment_turn()
+        self.log.info("Turn {} | user_input={}", ctx.turn_count, message[:80])
 
         # Step 2: 处方意图安全拦截
         if safety_filter.check_prescription_intent(message):
@@ -168,23 +175,18 @@ class ChatPipeline:
             "medical_history": [x.model_dump() for x in profile.medical_history]
         }
 
-        # Step 4: LLM 提取意图+实体
+        # Step 4: LLM 提取意图+实体（传入已累积的 slots 作为上下文）
         intent_result = await llm_service.extract_intent_and_entities(
             user_input=message,
-            context=profile_context
+            context=profile_context,
+            accumulated_slots=ctx.slots if ctx.slots else None
         )
-        logger.info(f"[Pipeline] 意图识别: {intent_result.intent.type}, 实体: {intent_result.entities}")
+        self.log.info("Extract: intent={}, entities={}", intent_result.intent.type, intent_result.entities)
 
         # Step 5: 合并实体到 MedicalContext.slots
-        old_slots = ctx.slots.copy()
-        ctx.merge_entities(intent_result.entities)
+        entities_delta = ctx.merge_entities(intent_result.entities)
         ctx.current_intent = IntentType(intent_result.intent.type)
-
-        # 计算 entities_delta（本轮新增/变更的实体）
-        entities_delta = {}
-        for key, value in ctx.slots.items():
-            if key not in old_slots or old_slots[key] != value:
-                entities_delta[key] = value
+        self.log.info("Slot Update: delta={}", entities_delta)
 
         # Step 6: 首次 triage 消息记为 chief_complaint
         if intent_result.intent.type == "triage" and ctx.chief_complaint is None:
@@ -202,6 +204,8 @@ class ChatPipeline:
         # Step 8: 危险信号检查
         entities_dict = ctx.get_entities_dict()
         danger_alert = triage_engine.check_danger_signals(entities_dict)
+        if danger_alert:
+            self.log.warning("DangerSignal: {}", danger_alert)
 
         # Step 9: 计算缺失槽位
         symptom = ctx.get_symptom()
@@ -212,6 +216,10 @@ class ChatPipeline:
                 entities_dict,
                 profile_context=profile_context
             )
+        self.log.info(
+            "SlotCheck: symptom={}, slots={}, missing={}",
+            symptom, list(ctx.slots.keys()), missing_slots
+        )
 
         # Step 10: 状态机决定 action → 执行 action → 持久化
         transition = dialogue_state_machine.transition(
@@ -221,9 +229,10 @@ class ChatPipeline:
             missing_slots=missing_slots
         )
 
-        logger.info(
-            f"[Pipeline] 状态转移: {transition.action.value} "
-            f"({dialogue_state_machine.get_action_description(transition.action)})"
+        self.log.info(
+            "Decide: action={} ({})",
+            transition.action.value,
+            dialogue_state_machine.get_action_description(transition.action)
         )
 
         # 执行 action
@@ -392,10 +401,22 @@ class ChatPipeline:
 
         # 构建结构化的缺失槽位信息（带建议选项）
         structured_slots = {}
+        # 槽位字段名到中文标签的映射
+        slot_label_map = {
+            "age_months": "月龄",
+            "temperature": "体温",
+            "duration": "持续时长",
+            "mental_state": "精神状态",
+            "accompanying_symptoms": "伴随症状",
+            "frequency": "频率",
+            "symptom": "症状"
+        }
         for slot in missing_slots:
             options = triage_engine.get_slot_options(slot)
+            # 使用中文标签，如果没有映射则使用字段名
+            label = slot_label_map.get(slot, slot)
             structured_slots[slot] = {
-                "label": slot,  # 前端有映射表，这里也可以传中文名
+                "label": label,
                 "options": options
             }
 

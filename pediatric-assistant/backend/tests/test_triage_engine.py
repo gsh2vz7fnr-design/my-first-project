@@ -124,3 +124,74 @@ class TestToNumberChinese:
     def test_to_number_fourteen(self):
         """TC-TE-NUM-09: '十四个月' 应解析为 14"""
         assert self.engine._to_number("十四个月") == 14.0
+
+
+class TestNewSymptomTriage:
+    """P1-4: 验证新增症状的分诊逻辑"""
+    def setup_method(self):
+        self.engine = TriageEngine()
+
+    def test_cough_symptom_triggers_observe(self):
+        """TC-TE-NEW-01: 咳嗽症状 -> observe"""
+        entities = {"symptom": "咳嗽", "age_months": 24, "duration": "2天"}
+        decision = self.engine.make_triage_decision("咳嗽", entities)
+        assert decision.level == "observe"
+        assert "咳嗽类型" in decision.action
+        assert "呼吸困难" in decision.action
+
+    def test_runny_nose_symptom_triggers_observe(self):
+        """TC-TE-NEW-02: 流鼻涕症状 -> observe"""
+        entities = {"symptom": "流鼻涕", "age_months": 18, "duration": "1天"}
+        decision = self.engine.make_triage_decision("流鼻涕", entities)
+        assert decision.level == "observe"
+        assert "流鼻涕" in decision.reason
+        assert "黄绿色" in decision.action
+
+    def test_crying_symptom_triggers_observe(self):
+        """TC-TE-NEW-03: 哭闹症状 -> observe"""
+        entities = {"symptom": "哭闹", "age_months": 6, "duration": "半天", "mental_state": "烦躁不安"}
+        decision = self.engine.make_triage_decision("哭闹", entities)
+        assert decision.level == "observe"
+        assert "哭闹不安" in decision.reason
+        assert "安抚" in decision.action
+
+    def test_rash_symptom_triggers_observe(self):
+        """TC-TE-NEW-04: 皮疹症状 -> observe"""
+        entities = {"symptom": "皮疹", "age_months": 36, "duration": "1天"}
+        decision = self.engine.make_triage_decision("皮疹", entities)
+        assert decision.level == "observe"
+        assert "皮疹症状" in decision.reason
+        assert "形态" in decision.action
+        assert "水泡" in decision.action
+
+    def test_cough_triage_method_exists(self):
+        """TC-TE-NEW-05: _triage_cough 方法存在且返回结构正确"""
+        decision = self.engine._triage_cough({"age_months": 12})
+        assert hasattr(decision, "level")
+        assert hasattr(decision, "reason")
+        assert hasattr(decision, "action")
+        assert decision.level == "observe"
+
+    def test_runny_nose_triage_method_exists(self):
+        """TC-TE-NEW-06: _triage_runny_nose 方法存在且返回结构正确"""
+        decision = self.engine._triage_runny_nose({"age_months": 12})
+        assert hasattr(decision, "level")
+        assert hasattr(decision, "reason")
+        assert hasattr(decision, "action")
+        assert decision.level == "observe"
+
+    def test_crying_triage_method_exists(self):
+        """TC-TE-NEW-07: _triage_crying 方法存在且返回结构正确"""
+        decision = self.engine._triage_crying({"age_months": 12})
+        assert hasattr(decision, "level")
+        assert hasattr(decision, "reason")
+        assert hasattr(decision, "action")
+        assert decision.level == "observe"
+
+    def test_rash_triage_method_exists(self):
+        """TC-TE-NEW-08: _triage_rash 方法存在且返回结构正确"""
+        decision = self.engine._triage_rash({"age_months": 12})
+        assert hasattr(decision, "level")
+        assert hasattr(decision, "reason")
+        assert hasattr(decision, "action")
+        assert decision.level == "observe"

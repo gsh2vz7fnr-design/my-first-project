@@ -8,7 +8,7 @@ MedicalContext 是一个结构化的对话状态对象，用于：
 4. 持久化病例数据
 """
 from datetime import datetime
-from typing import Dict, Any, List, Optional
+from typing import ClassVar, Dict, Any, FrozenSet, List, Optional
 from enum import Enum
 from pydantic import BaseModel, Field
 import json
@@ -98,6 +98,18 @@ class MedicalContext(BaseModel):
     )
 
     @property
+    def symptoms(self) -> List[str]:
+        """症状列表（读写代理到 slots['symptoms']）"""
+        val = self.slots.get("symptoms", [])
+        if isinstance(val, list):
+            return val
+        return [val] if val else []
+
+    @symptoms.setter
+    def symptoms(self, value: List[str]):
+        self.slots["symptoms"] = value
+
+    @property
     def triage_level(self) -> Optional[str]:
         """向后兼容：从 triage_snapshot 读取 level"""
         return self.triage_snapshot.level if self.triage_snapshot else None
@@ -142,50 +154,109 @@ class MedicalContext(BaseModel):
         else:
             self.triage_snapshot.action = value
 
-    def merge_entities(self, new_entities: Dict[str, Any]) -> None:
+    # ── 列表类型槽位（合并而非覆盖） ────────────────────────
+    _LIST_SLOTS: ClassVar[FrozenSet[str]] = frozenset(["symptoms", "accompanying_symptoms", "symptom_list"])
+    # ── LLM 产生的无效占位符 ──────────────────────────────
+    _PLACEHOLDER_VALUES: ClassVar[FrozenSet[str]] = frozenset(["unknown", "n/a", "未提及", "不清楚", "无", "不知道"])
+
+    @staticmethod
+    def _is_empty(value: Any) -> bool:
+        """判断一个值是否为"空"（None / 空字符串 / 空列表）"""
+        return value is None or value == "" or value == [] or value == {}
+
+    @staticmethod
+    def _is_placeholder(value: Any) -> bool:
+        """判断是否为 LLM 的无效占位符"""
+        if isinstance(value, str) and value.strip().lower() in MedicalContext._PLACEHOLDER_VALUES:
+            return True
+        return False
+
+    def _merge_single(self, key: str, value: Any) -> bool:
         """
-        合并新实体到已有槽位 (增量更新)
+        合并单个字段到 slots，返回是否实际发生了变更。
+        列表字段做合并去重，标量字段做 last-write-wins。
+        """
+        if key in self._LIST_SLOTS:
+            current = self.slots.get(key, [])
+            if not isinstance(current, list):
+                current = [current] if current else []
+            new_vals = value if isinstance(value, list) else [value]
+            merged = list(dict.fromkeys(current + new_vals))  # 保序去重
+            if merged != current:
+                self.slots[key] = merged
+                return True
+            return False
+        else:
+            old = self.slots.get(key)
+            if old != value:
+                self.slots[key] = value
+                return True
+            return False
+
+    def merge_entities(self, new_entities: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        合并新实体到已有槽位 (last-write-wins)
 
         规则：
-        1. 新值覆盖旧值（last-write-wins），除非新值为 None/空
-        2. 列表类型（如 symptoms）进行合并去重
-        3. 字符串类型若为 'unknown' 或 '未提及' 则忽略
+        1. 忽略 None / 空 / 占位符值
+        2. 列表类型（symptoms 等）合并去重
+        3. 标量类型新值覆盖旧值
+
+        Returns:
+            Dict[str, Any]: entities_delta — 本次实际变更的字段
         """
+        delta: Dict[str, Any] = {}
+
         for key, value in new_entities.items():
-            # 忽略空值
-            if value in [None, "", [], {}]:
+            if self._is_empty(value) or self._is_placeholder(value):
                 continue
-            
-            # 忽略无效占位符
-            if isinstance(value, str) and value.lower() in ["unknown", "n/a", "未提及", "不清楚"]:
-                continue
+            if self._merge_single(key, value):
+                delta[key] = self.slots[key]
 
-            # 处理列表合并 (symptoms, accompanying_symptoms)
-            if key in ["symptoms", "accompanying_symptoms", "symptom_list"]:
-                current = self.slots.get(key, [])
-                if not isinstance(current, list):
-                    current = [current] if current else []
-                
-                new_vals = value if isinstance(value, list) else [value]
-                # 合并并去重
-                merged = list(set(current + new_vals))
-                self.slots[key] = merged
-            
-            # 特殊处理：如果提取到了 age 但 slots 里是 age_months，尝试转换或保留
-            # 这里简单处理：直接更新
-            else:
-                self.slots[key] = value
-
-        # 同步更新主症状字段 (如果有)
-        if "symptom" in new_entities and new_entities["symptom"]:
-             self.symptom = new_entities["symptom"]
-        elif "symptoms" in self.slots and isinstance(self.slots["symptoms"], list) and len(self.slots["symptoms"]) > 0:
-             # 如果没有主症状但有症状列表，取第一个作为主症状
-             if not self.symptom:
-                 self.symptom = self.slots["symptoms"][0]
-
-        # 更新时间戳
+        self._sync_symptom_field(new_entities)
         self.updated_at = datetime.now()
+        return delta
+
+    def update_slots(self, new_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        增量更新槽位（不覆盖已有非空值）
+
+        与 merge_entities 的区别：
+        - merge_entities: last-write-wins，适用于用户主动纠正信息
+        - update_slots:   first-write-wins，适用于 LLM 自动提取（避免幻觉覆盖好数据）
+
+        Returns:
+            Dict[str, Any]: entities_delta — 本次实际变更的字段
+        """
+        delta: Dict[str, Any] = {}
+
+        for key, value in new_data.items():
+            if self._is_empty(value) or self._is_placeholder(value):
+                continue
+
+            existing = self.slots.get(key)
+
+            # 列表类型始终做合并
+            if key in self._LIST_SLOTS:
+                if self._merge_single(key, value):
+                    delta[key] = self.slots[key]
+            # 标量类型：仅当已有值为空时才写入
+            elif self._is_empty(existing):
+                self.slots[key] = value
+                delta[key] = value
+
+        self._sync_symptom_field(new_data)
+        self.updated_at = datetime.now()
+        return delta
+
+    def _sync_symptom_field(self, source: Dict[str, Any]) -> None:
+        """同步主症状字段"""
+        if "symptom" in source and source["symptom"]:
+            self.symptom = source["symptom"]
+        elif not self.symptom:
+            syms = self.slots.get("symptoms")
+            if isinstance(syms, list) and syms:
+                self.symptom = syms[0]
 
     def has_required_slots(self, required_slots: List[str]) -> bool:
         """

@@ -1,17 +1,13 @@
 """
-聊天服务 - 统一的对话处理入口
+聊天服务 - 旧版（已废弃）
 
-整合了：
-- 意图识别（IntentRouter）
-- RAG 检索（RAGService）
-- 分诊逻辑（TriageEngine）
-- 安全过滤（SafetyFilter）
+⚠️  此文件为遗留代码，不再是活跃的业务逻辑入口。
+    所有对话处理已迁移到 ChatPipeline (app/services/chat_pipeline.py)。
+    保留此文件仅为向后兼容。新代码请使用:
 
-设计原则：
-- 先识别意图，再决定处理流程
-- 简单问候直接回复，节省资源
-- 医疗查询才进行 RAG 检索
-- 统一使用 AsyncGenerator，消除流式/非流式重复代码
+        from app.services.chat_pipeline import get_chat_pipeline
+        pipeline = get_chat_pipeline()
+        result = await pipeline.process_message(user_id, message, conversation_id)
 """
 import asyncio
 import uuid

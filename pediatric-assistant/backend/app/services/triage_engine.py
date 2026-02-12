@@ -250,12 +250,23 @@ class TriageEngine:
             return self._triage_vomit(entities)
         elif symptom == "腹泻":
             return self._triage_diarrhea(entities)
+        elif symptom == "咳嗽":
+            return self._triage_cough(entities)
+        elif symptom == "流鼻涕":
+            return self._triage_runny_nose(entities)
+        elif symptom == "哭闹":
+            return self._triage_crying(entities)
+        elif symptom == "皮疹":
+            return self._triage_rash(entities)
         else:
-            # 默认建议
+            # 默认建议 - 针对未知症状提供更友好的建议
             return TriageDecision(
                 level="observe",
-                reason="症状不明确",
-                action="建议先在家观察，如症状加重请及时就医"
+                reason=f"宝宝出现{symptom}症状",
+                action=f"建议先在家观察{symptom}的情况。\n\n需要注意：\n"
+                       "1. 密切观察症状变化\n"
+                       "2. 如果症状加重或出现其他不适，请及时就医\n"
+                       "3. 保持宝宝舒适，适当补充水分"
             )
 
     def _evaluate_rules(self, rules: List[Dict[str, Any]], entities: Dict[str, Any]) -> Optional[TriageDecision]:
@@ -481,6 +492,58 @@ class TriageEngine:
                    "4. 伴随高热或精神萎靡"
         )
 
+    def _triage_cough(self, entities: Dict[str, Any]) -> TriageDecision:
+        """咳嗽分诊"""
+        return TriageDecision(
+            level="observe",
+            reason="咳嗽症状",
+            action="注意观察咳嗽类型和频率。如果出现以下情况请就医：\n"
+                   "1. 呼吸困难或呼吸急促\n"
+                   "2. 出现犬吠样咳嗽或痉挛性咳嗽\n"
+                   "3. 咳嗽持续超过1周\n"
+                   "4. 伴随高热或精神萎靡"
+        )
+
+    def _triage_runny_nose(self, entities: Dict[str, Any]) -> TriageDecision:
+        """流鼻涕分诊"""
+        return TriageDecision(
+            level="observe",
+            reason="流鼻涕症状",
+            action="通常是普通感冒的症状，注意保持鼻腔通畅。如果出现以下情况请就医：\n"
+                   "1. 鼻涕变为黄绿色且持续多日\n"
+                   "2. 伴随高热（体温超过38.5℃）\n"
+                   "3. 精神状态差、食欲明显下降\n"
+                   "4. 出现呼吸困难或耳朵疼痛"
+        )
+
+    def _triage_crying(self, entities: Dict[str, Any]) -> TriageDecision:
+        """哭闹分诊"""
+        return TriageDecision(
+            level="observe",
+            reason="哭闹不安",
+            action="宝宝哭闹可能由多种原因引起。请观察：\n"
+                   "1. 检查是否有发烧、皮疹等不适\n"
+                   "2. 注意哭闹的规律和强度\n"
+                   "3. 尝试安抚并观察反应\n\n"
+                   "如果出现以下情况请就医：\n"
+                   "1. 持续剧烈哭闹无法安抚\n"
+                   "2. 伴随呕吐、腹泻或高热\n"
+                   "3. 哭闹时身体僵硬或抽搐\n"
+                   "4. 精神萎靡、嗜睡"
+        )
+
+    def _triage_rash(self, entities: Dict[str, Any]) -> TriageDecision:
+        """皮疹分诊"""
+        return TriageDecision(
+            level="observe",
+            reason="皮疹症状",
+            action="注意观察皮疹的形态和分布。如果出现以下情况请就医：\n"
+                   "1. 皮疹迅速扩散或加重\n"
+                   "2. 伴随高热（体温超过38.5℃）\n"
+                   "3. 皮疹部位出现水泡、破溃或感染\n"
+                   "4. 宝宝精神萎靡、食欲不振"
+        )
+
     def _get_default_danger_signals(self) -> Dict[str, Any]:
         """获取默认危险信号配置"""
         return {
@@ -525,6 +588,22 @@ class TriageEngine:
             },
             "腹泻": {
                 "required": ["age_months", "duration"],
+                "optional": ["accompanying_symptoms"]
+            },
+            "咳嗽": {
+                "required": ["age_months", "duration", "cough_type"],
+                "optional": ["accompanying_symptoms", "mental_state"]
+            },
+            "流鼻涕": {
+                "required": ["age_months", "duration"],
+                "optional": ["accompanying_symptoms", "temperature", "mental_state"]
+            },
+            "哭闹": {
+                "required": ["age_months", "duration", "mental_state"],
+                "optional": ["accompanying_symptoms", "temperature"]
+            },
+            "皮疹": {
+                "required": ["age_months", "duration", "rash_location"],
                 "optional": ["accompanying_symptoms"]
             }
         }

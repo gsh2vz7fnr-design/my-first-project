@@ -10,6 +10,7 @@ import time
 import asyncio
 
 from app.config import settings
+from app.utils.logger import setup_logging
 from app.routers import chat, profile
 from app.services.profile_service import profile_service
 from app.services.conversation_service import conversation_service
@@ -21,6 +22,7 @@ from app.middleware.performance import performance_monitor
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     # startup
+    setup_logging(debug=settings.DEBUG)
     logger.info(f"{settings.APP_NAME} v{settings.APP_VERSION} 启动中...")
     logger.info(f"调试模式: {settings.DEBUG}")
     logger.info(f"大模型: {settings.DEEPSEEK_MODEL}")
@@ -128,7 +130,7 @@ if __name__ == "__main__":
     uvicorn.run(
         "app.main:app",
         host="0.0.0.0",
-        port=8000,
+        port=8001,
         reload=settings.DEBUG,
         log_level="info",
     )
