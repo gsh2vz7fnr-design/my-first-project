@@ -1,6 +1,13 @@
 // Note: components.js is loaded as a regular script, so all functions are global
 const API_BASE = "http://localhost:8001";
-const CURRENT_USER_ID = "test_user_001";
+
+// Global user ID - can be updated via soft login
+let CURRENT_USER_ID = "test_user_001";
+
+// Helper function to get current user ID
+function getUserId() {
+  return localStorage.getItem('pediatric_user_id') || CURRENT_USER_ID;
+}
 
 let conversationId = null;
 let currentTab = "chat"; // Track current tab
@@ -1345,47 +1352,24 @@ async function handleLoginSubmit() {
   // 生成简单的用户ID（可以根据需要改为 UUID）
   const generatedUserId = 'user_' + cleanedUserId.replace(/[^a-z0-9]/g, '');
 
-  try {
-    const response = await fetch(`${API_BASE}/api/v1/profile/validate-user`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        user_id: generatedUserId
-      })
-    });
+  // 🎨 软登录：直接接受用户输入，无需后端验证
+  // 保存到 localStorage
+  localStorage.setItem('pediatric_user_id', generatedUserId);
 
-    if (!response.ok) {
-      throw new Error('验证请求失败');
-    }
+  // 更新全局用户 ID
+  CURRENT_USER_ID = generatedUserId;
 
-    const result = await response.json();
+  console.log('[LOGIN] User logged in:', generatedUserId);
 
-    if (result.code !== 0 || !result.data.valid) {
-      alert(result.data.message || '用户ID 已存在或无效');
-      return;
-    }
+  // 隐藏登录 Modal
+  const loginModal = document.getElementById('login-modal');
+  loginModal.classList.remove('show');
 
-    // 保存到 localStorage
-    localStorage.setItem('pediatric_user_id', generatedUserId);
+  // 重新加载对话列表（使用新的 user_id）
+  await loadConversations();
 
-    // 更新全局常量
-    CURRENT_USER_ID = generatedUserId;
-
-    console.log('[LOGIN] User logged in:', generatedUserId);
-
-    // 隐藏登录 Modal
-    const loginModal = document.getElementById('login-modal');
-    loginModal.classList.remove('show');
-
-    // 重新加载对话列表（使用新的 user_id）
-    await loadConversations();
-
-    // 显示成功提示
-    showBanner(`欢迎回来，${cleanedUserId}！`, 'success');
-  } catch (err) {
-    console.error('[LOGIN] Login failed:', err);
-    alert('登录失败，请重试');
-  }
+  // 显示成功提示
+  showBanner(`欢迎回来，${cleanedUserId}！`, 'success');
 }
 
 // 页面加载时初始化登录功能
