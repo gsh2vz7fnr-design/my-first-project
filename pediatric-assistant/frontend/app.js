@@ -1,5 +1,5 @@
 // Note: components.js is loaded as a regular script, so all functions are global
-const API_BASE = "http://localhost:8000";
+const API_BASE = "http://localhost:8001";
 const CURRENT_USER_ID = "test_user_001";
 
 let conversationId = null;
@@ -676,20 +676,34 @@ function renderQuickReplies(metadata) {
   showBanner("提示：需要补充关键信息后才能给出更准确建议。", "info");
   clearComposerProgress();
 
+  // 移除之前的 quick-replies（防止叠加）
+  const prevQuickReplies = chat.querySelector(".inline-quick-replies");
+  if (prevQuickReplies) {
+    prevQuickReplies.remove();
+  }
+
   // 解析 missing_slots - 兼容数组和对象两种格式
   let slotKeys = [];
   let slotDefs = {};
 
-  if (Array.isArray(metadata.missing_slots)) {
+  const rawSlots = metadata.missing_slots;
+
+  // 防御性检查：missing_slots 为 falsy / 数字 / 空
+  if (!rawSlots || typeof rawSlots === 'number' || typeof rawSlots === 'string') {
+    console.warn('[Slot Filling] missing_slots 无效:', rawSlots);
+    return;
+  }
+
+  if (Array.isArray(rawSlots)) {
     // 数组格式: ["symptom", "duration"]
-    slotKeys = metadata.missing_slots;
+    slotKeys = rawSlots.filter(k => typeof k === 'string' && k.trim());
     slotKeys.forEach(key => {
       slotDefs[key] = { label: key, options: [] };
     });
-  } else if (typeof metadata.missing_slots === 'object') {
+  } else if (typeof rawSlots === 'object') {
     // 对象格式: {"symptom": {"label": "症状", "options": [...]}}
-    slotKeys = Object.keys(metadata.missing_slots);
-    slotDefs = metadata.missing_slots;
+    slotKeys = Object.keys(rawSlots);
+    slotDefs = rawSlots;
   }
 
   if (slotKeys.length === 0) {
@@ -740,7 +754,9 @@ function renderQuickReplies(metadata) {
   // 提示文字
   const promptText = document.createElement("div");
   promptText.className = "inline-quick-replies__prompt";
-  if (allowMultiSelect && chips.length > 0) {
+  if (chips.length === 0) {
+    promptText.textContent = `请描述${currentSlotLabel}：`;
+  } else if (allowMultiSelect) {
     promptText.textContent = `请选择${currentSlotLabel}（可多选）：`;
   } else {
     promptText.textContent = `请选择或描述${currentSlotLabel}：`;
@@ -817,8 +833,10 @@ function renderQuickReplies(metadata) {
     const hasInput = textInput.value.trim().length > 0;
     const hasSelection = selectedValues.length > 0;
     confirmBtn.disabled = !hasInput && !hasSelection;
-    if (allowMultiSelect && hasSelection) {
-      confirmBtn.textContent = `确认 (${selectedValues.length}项)`;
+    if (allowMultiSelect && hasSelection && selectedValues.length > 0) {
+      confirmBtn.textContent = `确认提交 (${selectedValues.length}项)`;
+    } else if (hasInput) {
+      confirmBtn.textContent = "发送";
     } else {
       confirmBtn.textContent = allowMultiSelect ? "选好了" : "发送";
     }
@@ -1071,7 +1089,15 @@ async function sendMessageStream(text, retryCount = 0) {
               }
 
               // ===== 在 done 后创建 Quick Replies（确保位置在 assistant 消息之后）=====
-              if (metadata && metadata.need_follow_up && metadata.missing_slots) {
+              const hasValidSlots = metadata
+                && metadata.need_follow_up
+                && metadata.missing_slots
+                && typeof metadata.missing_slots === 'object'
+                && (Array.isArray(metadata.missing_slots)
+                  ? metadata.missing_slots.length > 0
+                  : Object.keys(metadata.missing_slots).length > 0);
+
+              if (hasValidSlots) {
                 renderQuickReplies(metadata);
               } else {
                 // 无 follow-up 时正常滚动
