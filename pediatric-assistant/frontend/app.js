@@ -1061,6 +1061,12 @@ async function sendMessageStream(text, retryCount = 0) {
               streamDone = true;
               thinkingBubble.remove();
 
+              // 从 done 事件中提取 conversation_id 并更新本地变量
+              if (data.conversation_id) {
+                conversationId = data.conversation_id;
+                console.log(`📋 更新 conversation_id: ${conversationId}`);
+              }
+
               if (streamBubble) {
                 // 最终格式化
                 const formattedHTML = formatMessage(accumulatedText);

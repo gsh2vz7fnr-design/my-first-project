@@ -110,8 +110,12 @@ class PipelineResult:
             chunk = StreamChunk(type="content", content=text_chunk)
             yield f"data: {chunk.model_dump_json()}\n\n"
 
-        # 发送结束信号
-        yield "data: {\"type\": \"done\"}\n\n"
+        # 发送结束信号，包含 conversation_id
+        done_chunk = {
+            "type": "done",
+            "conversation_id": self.conversation_id
+        }
+        yield f"data: {json.dumps(done_chunk)}\n\n"
 
 
 class ChatPipeline:

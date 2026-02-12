@@ -94,7 +94,8 @@
       "Bash(PYTHONPATH=/Users/zhang/Desktop/Claude/pediatric-assistant/backend uvicorn:*)",
       "Bash(ps:*)",
       "Bash(pkill:*)",
-      "Bash(venv/bin/python:*)"
+      "Bash(venv/bin/python:*)",
+      "Bash(head:*)"
     ]
   }
 }
