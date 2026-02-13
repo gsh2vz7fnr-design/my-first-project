@@ -11,10 +11,11 @@ import asyncio
 
 from app.config import settings
 from app.utils.logger import setup_logging
-from app.routers import chat, profile
+from app.routers import chat, profile, auth
 from app.services.profile_service import profile_service
 from app.services.conversation_service import conversation_service
 from app.services.conversation_state_service import conversation_state_service
+from app.services.archive_service import archive_service
 from app.middleware.performance import performance_monitor
 
 
@@ -33,6 +34,7 @@ async def lifespan(app: FastAPI):
     profile_service.init_db()
     conversation_service.init_db()
     conversation_state_service.init_db()
+    archive_service.init_db()
     asyncio.create_task(profile_service.start_worker())
     yield
     # shutdown
@@ -82,6 +84,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 # 注册路由
 app.include_router(chat.router, prefix="/api/v1/chat", tags=["对话"])
 app.include_router(profile.router, prefix="/api/v1/profile", tags=["健康档案"])
+app.include_router(auth.router, prefix="/api/v1/auth", tags=["认证"])
 
 
 @app.get("/favicon.ico", include_in_schema=False)

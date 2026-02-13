@@ -41,6 +41,85 @@ class LLMService:
         else:
             self._remote_cooldown_until = 0.0
 
+    def _parse_json_from_llm_response(self, content: str) -> dict:
+        """
+        从 LLM 响应中解析 JSON，清理可能的 Markdown 代码块标记
+
+        Args:
+            content: LLM 返回的原始内容，可能包含 ```json...``` 标记
+
+        Returns:
+            dict: 解析后的 JSON 对象
+
+        Raises:
+            json.JSONDecodeError: 如果清理后仍无法解析为有效 JSON
+        """
+        # 清理 Markdown 代码块标记
+        content = content.strip()
+
+        # 移除开头的 ```json 或 ```
+        if content.startswith("```"):
+            lines = content.split('\n', 1)
+            if len(lines) > 1:
+                content = lines[1]
+
+        # 移除结尾的 ```
+        if content.endswith("```"):
+            content = content[:-3]
+
+        content = content.strip()
+
+        return json.loads(content)
+
+    def _try_fast_path_extraction(self, user_input: str) -> Optional[dict]:
+        """
+        快速路径：检测简单的时间/数字输入，避免调用 LLM
+
+        当用户输入只包含简单的时间信息（如"半天"、"3天"、"2小时"）时，
+        直接返回 slot_filling 意图，跳过耗时 2 秒的 LLM 调用。
+
+        Args:
+            user_input: 用户输入
+
+        Returns:
+            Optional[dict]: 如果是简单输入则返回结果，否则返回 None
+        """
+        import re
+
+        text = user_input.strip()
+
+        # 简单时长模式：只包含时间单位 + 数字/中文数字
+        # 匹配：半天、3天、2小时、5分钟、一周等
+        time_patterns = [
+            r'^[\d一二三四五六七八九十百千万几]+(?:天|日|周|个月?|小时?|分种?|秒种?)$',
+            r'^(?:半天|多长时间|好几天|几天了|几小时|大概多久)$'
+        ]
+
+        for pattern in time_patterns:
+            if re.match(pattern, text):
+                # 提取时间值
+                duration_value = text
+                return {
+                    "intent": "slot_filling",
+                    "intent_confidence": 0.95,
+                    "entities": {
+                        "duration": duration_value
+                    }
+                }
+
+        # 简单数字模式：只是补充数值信息
+        if re.match(r'^\d+$', text):
+            return {
+                "intent": "slot_filling",
+                "intent_confidence": 0.90,
+                "entities": {
+                    "unknown_numeric": text
+                }
+            }
+
+        # 不是简单输入，需要走 LLM 路径
+        return None
+
     async def extract_intent_and_entities(
         self,
         user_input: str,
@@ -58,6 +137,12 @@ class LLMService:
         Returns:
             IntentAndEntities: 意图和实体
         """
+        # P7 优化: 快速路径 - 检测简单的时间/数字输入，避免调用 LLM
+        fast_result = self._try_fast_path_extraction(user_input)
+        if fast_result:
+            self.log.debug("快速路径提取: {}", fast_result)
+            return self._normalize_intent_entities(fast_result, user_input=user_input)
+
         # 构建提示词
         system_prompt = self._build_intent_extraction_prompt()
         user_prompt = self._build_user_prompt(user_input, context, accumulated_slots)
@@ -78,7 +163,7 @@ class LLMService:
 
             content = response.choices[0].message.content
             self.log.debug("LLM Response | raw={}", content)
-            result = json.loads(content)
+            result = self._parse_json_from_llm_response(content)
             return self._normalize_intent_entities(result, user_input=user_input)
 
         except Exception as e:
@@ -151,7 +236,7 @@ class LLMService:
             )
 
             content = response.choices[0].message.content
-            return json.loads(content)
+            return self._parse_json_from_llm_response(content)
         except Exception as e:
             logger.error("档案抽取异常: {}", e, exc_info=True)
             self.remote_available = False
@@ -978,6 +1063,211 @@ class LLMService:
 
 每次回答末尾附带：
 以上为 AI 参考建议，不作为医疗诊断依据，请以医生医嘱为准。"""
+
+    async def generate_structured_triage_response(
+        self,
+        rag_content: str,
+        user_context: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """
+        生成结构化分诊响应（4部分格式，≤180字）
+
+        Args:
+            rag_content: RAG检索到的医学内容
+            user_context: 用户上下文（症状、月龄等）
+
+        Returns:
+            str: 结构化响应文本
+        """
+        # 构建4部分格式的提示词
+        prompt = f"""基于以下医学内容，生成一个结构化的分诊响应。
+
+医学内容：
+{rag_content}
+
+用户上下文：
+{json.dumps(user_context, ensure_ascii=False) if user_context else "无"}
+
+请生成一个包含以下4部分的响应（总字数≤180字）：
+1. 症状识别（20-30字）：简要确认症状和严重程度
+2. 初步判断（30-40字）：基于医学内容的初步评估
+3. 处理建议（50-60字）：具体的居家护理或就医建议
+4. 观察要点（30-40字）：需要重点观察的症状变化
+
+要求：
+- 使用温暖、专业的语气
+- 避免医学术语堆砌
+- 每部分用换行分隔
+- 不要加序号或标题
+
+直接输出响应文本，不要解释。"""
+
+        if not self.remote_available:
+            # 本地兜底：使用简化格式
+            return self._generate_fallback_triage_response(user_context)
+
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": self._build_system_prompt()},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.7,
+                max_tokens=300
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            self.log.error("生成结构化分诊响应失败: {}", e, exc_info=True)
+            self.remote_available = False
+            return self._generate_fallback_triage_response(user_context)
+
+    async def generate_structured_consult_response(
+        self,
+        rag_content: str,
+        user_context: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """
+        生成结构化咨询响应（3部分格式，≤180字）
+
+        Args:
+            rag_content: RAG检索到的医学内容
+            user_context: 用户上下文
+
+        Returns:
+            str: 结构化响应文本
+        """
+        prompt = f"""基于以下医学内容，生成一个结构化的咨询响应。
+
+医学内容：
+{rag_content}
+
+用户上下文：
+{json.dumps(user_context, ensure_ascii=False) if user_context else "无"}
+
+请生成一个包含以下3部分的响应（总字数≤180字）：
+1. 核心解答（50-60字）：直接回答用户的问题
+2. 补充说明（50-60字）：相关的注意事项或背景知识
+3. 建议行动（30-40字）：具体的护理建议或观察要点
+
+要求：
+- 使用温暖、专业的语气
+- 避免医学术语堆砌
+- 每部分用换行分隔
+- 不要加序号或标题
+
+直接输出响应文本，不要解释。"""
+
+        if not self.remote_available:
+            return self._generate_fallback_consult_response(user_context)
+
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": self._build_system_prompt()},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.7,
+                max_tokens=300
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            self.log.error("生成结构化咨询响应失败: {}", e, exc_info=True)
+            self.remote_available = False
+            return self._generate_fallback_consult_response(user_context)
+
+    async def generate_structured_health_advice(
+        self,
+        rag_content: str,
+        user_context: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """
+        生成结构化健康建议（混合格式）
+
+        Args:
+            rag_content: RAG检索到的医学内容
+            user_context: 用户上下文
+
+        Returns:
+            str: 结构化响应文本
+        """
+        prompt = f"""基于以下医学内容，生成一个结构化的健康建议。
+
+医学内容：
+{rag_content}
+
+用户上下文：
+{json.dumps(user_context, ensure_ascii=False) if user_context else "无"}
+
+请生成包含以下部分的响应：
+1. 简短引言（20-30字）
+2. 关键建议（分点列出，2-3条，每条20-30字）
+3. 注意事项（30-40字）
+
+格式示例：
+理解您的关心。关于XX，有几点建议：
+
+• 第一条建议内容
+• 第二条建议内容
+• 第三条建议内容
+
+需要注意：观察要点和预警信号
+
+要求：
+- 使用温暖、专业的语气
+- 建议部分用"•"符号分点
+- 总字数控制在200字以内
+
+直接输出响应文本，不要解释。"""
+
+        if not self.remote_available:
+            return self._generate_fallback_health_advice(user_context)
+
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": self._build_system_prompt()},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.7,
+                max_tokens=350
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            self.log.error("生成结构化健康建议失败: {}", e, exc_info=True)
+            self.remote_available = False
+            return self._generate_fallback_health_advice(user_context)
+
+    def _generate_fallback_triage_response(self, context: Optional[Dict[str, Any]]) -> str:
+        """本地兜底：生成简化的分诊响应"""
+        symptom = context.get("symptom", "不适") if context else "不适"
+        return f"""已收到您关于宝宝{symptom}的情况。
+
+根据描述，建议先在家观察症状变化。
+
+注意保持宝宝舒适，适当补充水分，观察精神状态。
+
+如果症状加重或出现新的不适，请及时就医。"""
+
+    def _generate_fallback_consult_response(self, context: Optional[Dict[str, Any]]) -> str:
+        """本地兜底：生成简化的咨询响应"""
+        return """理解您的关心。
+
+建议您密切观察宝宝的情况，保持舒适的环境。
+
+如有疑虑，建议咨询专业医生获取更准确的建议。"""
+
+    def _generate_fallback_health_advice(self, context: Optional[Dict[str, Any]]) -> str:
+        """本地兜底：生成简化的健康建议"""
+        return """理解您的关心。关于这个问题，有几点建议：
+
+• 密切观察宝宝的状态变化
+• 保持舒适的环境和适当的水分补充
+• 记录症状的发展情况
+
+需要注意：如果情况加重或出现新症状，请及时就医。"""
 
 
 # 创建全局实例

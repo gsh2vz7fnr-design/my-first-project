@@ -1,4 +1,125 @@
 /**
+ * Create archive confirmation modal
+ * @param {Object} options - Configuration options
+ * @param {boolean} options.multiMember - Whether conversation has multiple members
+ * @param {Array} options.members - List of members (if multiMember is true)
+ * @param {Function} options.onConfirm - Callback when archive is confirmed
+ * @param {Function} options.onCancel - Callback when cancelled
+ * @returns {Object} - Modal element with show/hide methods
+ */
+function createArchiveConfirmModal(options = {}) {
+  const { multiMember = false, members = [], onConfirm, onCancel } = options;
+
+  const overlay = document.createElement("div");
+  overlay.className = "archive-modal-overlay";
+  overlay.setAttribute("role", "dialog");
+  overlay.setAttribute("aria-modal", "true");
+  overlay.setAttribute("aria-labelledby", "archive-modal-title");
+
+  const modal = document.createElement("div");
+  modal.className = "archive-modal";
+
+  if (multiMember && members.length > 0) {
+    // Multi-member selector
+    modal.innerHTML = `
+      <div class="archive-modal__header">
+        <h2 id="archive-modal-title" class="archive-modal__title">选择归档成员</h2>
+        <button class="archive-modal__close" aria-label="关闭">×</button>
+      </div>
+      <div class="archive-modal__body">
+        <p class="archive-modal__description">
+          本次对话涉及多位成员，请选择归档到哪个成员的健康档案：
+        </p>
+        <div class="member-selector" id="member-selector">
+          ${members.map((member, index) => `
+            <label class="member-option">
+              <input type="radio" name="selected-member" value="${member.id}" ${index === 0 ? 'checked' : ''} />
+              <span class="member-option__label">
+                <span class="member-option__name">${member.name || '未命名成员'}</span>
+                <span class="member-option__meta">${member.relationship || ''} · ${member.age || ''}</span>
+              </span>
+            </label>
+          `).join('')}
+        </div>
+      </div>
+      <div class="archive-modal__actions">
+        <button class="archive-modal__button archive-modal__button--cancel" type="button">取消</button>
+        <button class="archive-modal__button archive-modal__button--confirm" type="button">确认归档</button>
+      </div>
+    `;
+  } else {
+    // Single member or auto-archive confirmation
+    modal.innerHTML = `
+      <div class="archive-modal__header">
+        <h2 id="archive-modal-title" class="archive-modal__title">归档对话</h2>
+        <button class="archive-modal__close" aria-label="关闭">×</button>
+      </div>
+      <div class="archive-modal__body">
+        <div class="archive-modal__icon">📁</div>
+        <p class="archive-modal__description">
+          确认将本次对话归档到健康档案吗？归档后对话将保存为只读记录。
+        </p>
+      </div>
+      <div class="archive-modal__actions">
+        <button class="archive-modal__button archive-modal__button--cancel" type="button">取消</button>
+        <button class="archive-modal__button archive-modal__button--confirm" type="button">确认归档</button>
+      </div>
+    `;
+  }
+
+  overlay.appendChild(modal);
+
+  const closeBtn = modal.querySelector(".archive-modal__close");
+  const cancelBtn = modal.querySelector(".archive-modal__button--cancel");
+  const confirmBtn = modal.querySelector(".archive-modal__button--confirm");
+
+  const close = () => {
+    overlay.classList.remove("archive-modal-overlay--visible");
+    setTimeout(() => {
+      overlay.remove();
+    }, 300);
+    if (onCancel) onCancel();
+  };
+
+  const confirm = () => {
+    let selectedMemberId = null;
+    if (multiMember && members.length > 0) {
+      const selectedRadio = modal.querySelector('input[name="selected-member"]:checked');
+      selectedMemberId = selectedRadio ? selectedRadio.value : members[0].id;
+    }
+
+    overlay.classList.remove("archive-modal-overlay--visible");
+    setTimeout(() => {
+      overlay.remove();
+    }, 300);
+
+    if (onConfirm) onConfirm(selectedMemberId);
+  };
+
+  closeBtn.addEventListener("click", close);
+  cancelBtn.addEventListener("click", close);
+  confirmBtn.addEventListener("click", confirm);
+
+  // Close on overlay click
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) {
+      close();
+    }
+  });
+
+  return {
+    element: overlay,
+    show() {
+      document.body.appendChild(overlay);
+      overlay.offsetHeight; // Trigger reflow
+      overlay.classList.add("archive-modal-overlay--visible");
+      confirmBtn.focus();
+    },
+    hide: close,
+  };
+}
+
+/**
  * Create a disclaimer modal for first-time users
  * @returns {Object} - Modal element with show/hide methods
  */
@@ -109,10 +230,11 @@ function createHeader() {
 
       <!-- 右侧：操作按钮 -->
       <div class="header-right">
-        <button class="header-icon-btn" aria-label="清除对话">
+        <button class="header-icon-btn" aria-label="归档对话" id="archive-conversation-btn">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polyline points="3 6 5 6 21 6"></polyline>
-            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+            <path d="M21 8v13H3V8"></path>
+            <path d="M1 3h22v5H1z"></path>
+            <line x1="10" y1="12" x2="14" y2="12"></line>
           </svg>
         </button>
       </div>
@@ -154,10 +276,10 @@ function createHeader() {
     header.dispatchEvent(new CustomEvent("menu-toggle", { bubbles: true }));
   });
 
-  // Setup clear button handler
-  const clearBtn = header.querySelector(".header-icon-btn[aria-label='清除对话']");
-  clearBtn.addEventListener("click", () => {
-    header.dispatchEvent(new CustomEvent("clear-chat", { bubbles: true }));
+  // Setup archive button handler
+  const archiveBtn = header.querySelector("#archive-conversation-btn");
+  archiveBtn.addEventListener("click", () => {
+    header.dispatchEvent(new CustomEvent("archive-conversation", { bubbles: true }));
   });
 
   return header;
@@ -994,9 +1116,19 @@ function createConversationSidebar({ onNewConversation, onSelectConversation, on
       item.className = "sidebar-item";
       item.dataset.conversationId = conv.conversation_id;
 
+      // 添加已归档标记
+      if (conv.archived) {
+        item.classList.add("sidebar-item--archived");
+      }
+
       const title = document.createElement("div");
       title.className = "sidebar-item-title";
       title.textContent = conv.title || "新对话";
+
+      // 已归档添加图标
+      if (conv.archived) {
+        title.innerHTML = `📁 ${title.textContent}`;
+      }
 
       const meta = document.createElement("div");
       meta.className = "sidebar-item-meta";
@@ -1015,18 +1147,26 @@ function createConversationSidebar({ onNewConversation, onSelectConversation, on
       const actions = document.createElement("div");
       actions.className = "sidebar-item-actions";
 
-      const deleteBtn = document.createElement("button");
-      deleteBtn.className = "sidebar-item-delete";
-      deleteBtn.innerHTML = "🗑";
-      deleteBtn.title = "删除对话";
-      deleteBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        if (onDeleteConversation) {
-          onDeleteConversation(conv.conversation_id);
-        }
-      });
-
-      actions.appendChild(deleteBtn);
+      // 已归档对话不显示删除按钮
+      if (!conv.archived) {
+        const deleteBtn = document.createElement("button");
+        deleteBtn.className = "sidebar-item-delete";
+        deleteBtn.innerHTML = "🗑";
+        deleteBtn.title = "删除对话";
+        deleteBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          if (onDeleteConversation) {
+            onDeleteConversation(conv.conversation_id);
+          }
+        });
+        actions.appendChild(deleteBtn);
+      } else {
+        // 已归档标签
+        const archivedLabel = document.createElement("span");
+        archivedLabel.className = "sidebar-item-archived-label";
+        archivedLabel.textContent = "已归档";
+        actions.appendChild(archivedLabel);
+      }
 
       item.appendChild(title);
       item.appendChild(meta);
@@ -1057,6 +1197,27 @@ function createConversationSidebar({ onNewConversation, onSelectConversation, on
   }
 
   /**
+   * Clear active conversation
+   */
+  function clearActive() {
+    refs.list.querySelectorAll(".sidebar-item").forEach((item) => {
+      item.classList.remove("active");
+    });
+  }
+
+  /**
+   * Get latest conversation ID
+   * @returns {string|null} - Latest conversation ID or null
+   */
+  function getLatestConversationId() {
+    const items = refs.list.querySelectorAll(".sidebar-item");
+    if (items.length > 0) {
+      return items[0].dataset.conversationId;
+    }
+    return null;
+  }
+
+  /**
    * Format relative time
    * @param {string} timestamp - ISO timestamp
    * @returns {string} - Formatted time
@@ -1084,6 +1245,8 @@ function createConversationSidebar({ onNewConversation, onSelectConversation, on
     refs,
     renderConversations,
     setActive,
+    clearActive,
+    getLatestConversationId,
     conversations,
   };
 }
@@ -1942,6 +2105,7 @@ function createMemberProfileForm() {
 }
 
 // Export all functions to global scope for use in app.js
+window.createArchiveConfirmModal = createArchiveConfirmModal;
 window.createDisclaimerModal = createDisclaimerModal;
 window.createHeader = createHeader;
 window.createTabs = createTabs;

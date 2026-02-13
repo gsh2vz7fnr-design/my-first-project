@@ -71,6 +71,38 @@ class ConversationService:
                 """
             )
 
+            # 兼容旧表：添加archived相关字段
+            try:
+                conn.execute("ALTER TABLE conversations ADD COLUMN archived BOOLEAN DEFAULT 0")
+                conn.commit()
+            except sqlite3.OperationalError:
+                pass  # 列已存在
+
+            try:
+                conn.execute("ALTER TABLE conversations ADD COLUMN archived_at TEXT")
+                conn.commit()
+            except sqlite3.OperationalError:
+                pass  # 列已存在
+
+            try:
+                conn.execute("ALTER TABLE conversations ADD COLUMN archived_member_id TEXT")
+                conn.commit()
+            except sqlite3.OperationalError:
+                pass  # 列已存在
+
+            # Users table
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS users (
+                    user_id TEXT PRIMARY KEY,
+                    nickname TEXT,
+                    email TEXT,
+                    created_at TEXT,
+                    last_login TEXT
+                )
+                """
+            )
+
             conn.commit()
 
     def append_message(self, conversation_id: str, user_id: str, role: str, content: str, metadata: Optional[Dict] = None) -> None:
@@ -170,7 +202,8 @@ class ConversationService:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT id, title, message_count, created_at, updated_at
+                SELECT id, title, message_count, created_at, updated_at,
+                       archived, archived_member_id, archived_at
                 FROM conversations
                 WHERE user_id = ?
                 ORDER BY updated_at DESC
@@ -185,6 +218,9 @@ class ConversationService:
                 "message_count": row["message_count"],
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
+                "archived": row["archived"],
+                "archived_member_id": row["archived_member_id"],
+                "archived_at": row["archived_at"],
             }
             for row in rows
         ]
@@ -252,6 +288,145 @@ class ConversationService:
             "created_at": now,
             "updated_at": now,
         }
+
+    def upsert_user(self, user_id: str, nickname: Optional[str] = None, email: Optional[str] = None) -> Dict[str, any]:
+        """
+        创建或更新用户，更新 last_login
+
+        Args:
+            user_id: 用户ID
+            nickname: 昵称（可选）
+            email: 邮箱（可选）
+
+        Returns:
+            Dict: 用户信息
+        """
+        now = datetime.now().isoformat()
+
+        with self._connect() as conn:
+            # 检查用户是否存在
+            existing = conn.execute(
+                "SELECT user_id, nickname, email, created_at FROM users WHERE user_id = ?",
+                (user_id,)
+            ).fetchone()
+
+            if existing:
+                # 更新 last_login，以及提供的字段
+                update_fields = ["last_login = ?"]
+                update_values = [now]
+
+                if nickname is not None:
+                    update_fields.append("nickname = ?")
+                    update_values.append(nickname)
+
+                if email is not None:
+                    update_fields.append("email = ?")
+                    update_values.append(email)
+
+                update_values.append(user_id)
+
+                conn.execute(
+                    f"UPDATE users SET {', '.join(update_fields)} WHERE user_id = ?",
+                    update_values
+                )
+                conn.commit()
+
+                # 返回更新后的用户信息
+                result = conn.execute(
+                    "SELECT user_id, nickname, email, created_at, last_login FROM users WHERE user_id = ?",
+                    (user_id,)
+                ).fetchone()
+
+                return {
+                    "user_id": result["user_id"],
+                    "nickname": result["nickname"],
+                    "email": result["email"],
+                    "created_at": result["created_at"],
+                    "last_login": result["last_login"],
+                }
+            else:
+                # 创建新用户
+                conn.execute(
+                    """
+                    INSERT INTO users (user_id, nickname, email, created_at, last_login)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (user_id, nickname, email, now, now)
+                )
+                conn.commit()
+
+                return {
+                    "user_id": user_id,
+                    "nickname": nickname,
+                    "email": email,
+                    "created_at": now,
+                    "last_login": now,
+                }
+
+    def get_user(self, user_id: str) -> Optional[Dict[str, any]]:
+        """
+        获取用户信息
+
+        Args:
+            user_id: 用户ID
+
+        Returns:
+            Optional[Dict]: 用户信息，不存在返回 None
+        """
+        with self._connect() as conn:
+            result = conn.execute(
+                "SELECT user_id, nickname, email, created_at, last_login FROM users WHERE user_id = ?",
+                (user_id,)
+            ).fetchone()
+
+            if result:
+                return {
+                    "user_id": result["user_id"],
+                    "nickname": result["nickname"],
+                    "email": result["email"],
+                    "created_at": result["created_at"],
+                    "last_login": result["last_login"],
+                }
+            return None
+
+    def mark_archived(self, conversation_id: str, member_id: str) -> bool:
+        """
+        标记对话为已归档
+
+        Args:
+            conversation_id: 对话ID
+            member_id: 用户ID
+
+        Returns:
+            bool: 是否标记成功
+        """
+        try:
+            now = datetime.now().isoformat()
+
+            with self._connect() as conn:
+                conn.execute(
+                    """
+                    UPDATE conversations
+                    SET archived = 1,
+                        archived_at = ?,
+                        archived_member_id = ?
+                    WHERE id = ?
+                    """,
+                    (now, member_id, conversation_id)
+                )
+                conn.commit()
+
+                # 检查是否成功更新
+                updated = conn.execute(
+                    "SELECT archived FROM conversations WHERE id = ?",
+                    (conversation_id,)
+                ).fetchone()
+
+                return updated is not None and updated["archived"] == 1
+
+        except Exception as e:
+            logger.error(f"标记对话为已归档失败: {e}")
+            return False
 
 
 conversation_service = ConversationService(settings.SQLITE_DB_PATH)

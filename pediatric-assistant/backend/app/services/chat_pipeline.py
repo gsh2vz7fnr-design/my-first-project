@@ -180,6 +180,11 @@ class ChatPipeline:
             "medical_history": [x.model_dump() for x in profile.medical_history]
         }
 
+        # Auto-fill age_months from profile if available and not already in context
+        if profile.baby_info.age_months is not None and "age_months" not in ctx.slots:
+            ctx.slots["age_months"] = profile.baby_info.age_months
+            self.log.info("Auto-filled age_months from profile: {}", profile.baby_info.age_months)
+
         # Step 4: LLM 提取意图+实体（传入已累积的 slots 作为上下文）
         intent_result = await llm_service.extract_intent_and_entities(
             user_input=message,
@@ -456,7 +461,36 @@ class ChatPipeline:
             action=decision.action
         )
 
-        response_message = f"**{decision.reason}**\n\n{decision.action}"
+        # 检查是否为首次分诊（基于 ctx.chief_complaint）
+        is_first_triage = ctx.chief_complaint is not None and ctx.triage_snapshot is not None
+
+        if is_first_triage:
+            # 首次分诊：使用结构化响应 + RAG内容
+            # 从RAG获取相关医学内容
+            query = f"{symptom}的症状和护理建议"
+            rag_result = await self.rag_service.generate_answer_with_sources(
+                query=query,
+                context=profile_context
+            )
+
+            # 构建用户上下文
+            user_context = {
+                "symptom": symptom,
+                "entities": entities_dict,
+                "triage_level": decision.level
+            }
+
+            # 生成结构化响应
+            structured_response = await llm_service.generate_structured_triage_response(
+                rag_content=rag_result.answer,
+                user_context=user_context
+            )
+
+            response_message = f"**{decision.reason}**\n\n{structured_response}\n\n{decision.action}"
+        else:
+            # 非首次分诊：使用原有格式
+            response_message = f"**{decision.reason}**\n\n{decision.action}"
+
         response_message = safety_filter.add_disclaimer(response_message)
 
         return PipelineResult(
@@ -465,7 +499,8 @@ class ChatPipeline:
             metadata={
                 "intent": "triage",
                 "triage_level": decision.level,
-                "entities": entities_dict
+                "entities": entities_dict,
+                "is_first_triage": is_first_triage
             }
         )
 
@@ -494,11 +529,41 @@ class ChatPipeline:
                 metadata={"blocked": True, "reason": "safety_filter"}
             )
 
+        # 检查是否为首次咨询（基于 current_intent 和对话历史）
+        is_first_consult = (
+            ctx.current_intent == IntentType.CONSULT and
+            ctx.turn_count <= 2 and
+            ctx.chief_complaint is None
+        )
+
+        # 生成响应
+        if is_first_consult and ctx.current_intent in (IntentType.CONSULT, IntentType.CARE):
+            # 首次咨询：使用结构化响应
+            user_context = {
+                "query": query,
+                "entities": ctx.get_entities_dict(),
+                "intent": ctx.current_intent.value if ctx.current_intent else "consult"
+            }
+
+            if ctx.current_intent == IntentType.CARE:
+                structured_response = await llm_service.generate_structured_health_advice(
+                    rag_content=rag_result.answer,
+                    user_context=user_context
+                )
+            else:
+                structured_response = await llm_service.generate_structured_consult_response(
+                    rag_content=rag_result.answer,
+                    user_context=user_context
+                )
+
+            response_message = structured_response
+        else:
+            # 非首次咨询：使用原有格式
+            response_message = rag_result.answer
+
         # 添加情绪承接
         if emotion_support:
-            response_message = f"{emotion_support}\n\n{rag_result.answer}"
-        else:
-            response_message = rag_result.answer
+            response_message = f"{emotion_support}\n\n{response_message}"
 
         # 添加免责声明
         response_message = safety_filter.add_disclaimer(response_message)
@@ -515,7 +580,8 @@ class ChatPipeline:
             metadata={
                 "intent": ctx.current_intent.value if ctx.current_intent else "consult",
                 "has_source": rag_result.has_source,
-                "emotion_detected": emotion_support is not None
+                "emotion_detected": emotion_support is not None,
+                "is_first_consult": is_first_consult
             }
         )
 

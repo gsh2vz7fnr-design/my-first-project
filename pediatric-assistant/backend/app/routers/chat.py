@@ -17,6 +17,7 @@ from app.services.stream_filter import StreamSafetyFilter
 from app.services.rag_service import get_rag_service
 from app.services.conversation_service import conversation_service
 from app.services.conversation_state_service import conversation_state_service
+from app.services.archive_service import archive_service
 from app.config import settings
 
 router = APIRouter()
@@ -253,6 +254,91 @@ async def create_conversation(user_id: str):
         }
     except Exception as e:
         logger.error(f"创建对话失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/conversations/{conversation_id}/archive")
+async def archive_conversation(conversation_id: str, user_id: str):
+    """
+    归档对话到consultation_records
+
+    Args:
+        conversation_id: 对话ID
+        user_id: 用户ID（通过查询参数传递）
+
+    Returns:
+        dict: 归档结果
+    """
+    try:
+        # 归档对话
+        result = await archive_service.archive_conversation(conversation_id, user_id)
+
+        # 标记会话为已归档
+        conversation_service.mark_archived(conversation_id, user_id)
+
+        return {
+            "code": 0,
+            "data": result,
+            "message": "对话已成功归档"
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"归档对话失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/conversations/{conversation_id}/archive")
+async def get_archived_conversation(conversation_id: str):
+    """
+    获取归档的对话
+
+    Args:
+        conversation_id: 对话ID
+
+    Returns:
+        dict: 归档记录
+    """
+    try:
+        record = archive_service.get_archived_conversation(conversation_id)
+
+        if not record:
+            raise HTTPException(status_code=404, detail="归档记录未找到")
+
+        return {
+            "code": 0,
+            "data": record
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取归档对话失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/members/{member_id}/archives")
+async def get_member_archives(member_id: str):
+    """
+    获取用户的所有归档对话
+
+    Args:
+        member_id: 用户ID
+
+    Returns:
+        dict: 归档记录列表
+    """
+    try:
+        archives = archive_service.get_member_archived_conversations(member_id)
+
+        return {
+            "code": 0,
+            "data": {
+                "archives": archives,
+                "total": len(archives)
+            }
+        }
+    except Exception as e:
+        logger.error(f"获取用户归档列表失败: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

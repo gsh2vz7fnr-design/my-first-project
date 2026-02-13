@@ -1,5 +1,5 @@
 // Note: components.js is loaded as a regular script, so all functions are global
-const API_BASE = "http://localhost:8001";
+const API_BASE = "http://localhost:8000";
 
 // Global user ID - can be updated via soft login
 let CURRENT_USER_ID = "test_user_001";
@@ -11,6 +11,7 @@ function getUserId() {
 
 let conversationId = null;
 let currentTab = "chat"; // Track current tab
+let isInitialLoad = true; // Track initial page load
 
 // ============ 自动滚动管理 ============
 let userScrolledUp = false; // 用户是否手动向上翻阅
@@ -522,6 +523,31 @@ async function loadConversations() {
     return;
   }
 
+  // 🎨 验证用户 ID（调用后端 API）
+  try {
+    const validateResponse = await fetch(`${API_BASE}/api/v1/auth/user/${userId}`);
+    if (!validateResponse.ok) {
+      // 后端验证失败，清除本地数据，重新登录
+      console.warn('[LOGIN] User validation failed, clearing local data');
+      localStorage.removeItem('pediatric_user_id');
+      const loginModal = document.getElementById('login-modal');
+      loginModal.classList.add('show');
+      return;
+    }
+    const validateData = await validateResponse.json();
+    if (!validateData.data?.valid) {
+      // 用户 ID 无效
+      console.warn('[LOGIN] User ID invalid');
+      localStorage.removeItem('pediatric_user_id');
+      const loginModal = document.getElementById('login-modal');
+      loginModal.classList.add('show');
+      return;
+    }
+  } catch (error) {
+    // 后端 API 不可用，使用本地验证 fallback
+    console.warn('[LOGIN] Backend validation unavailable, using local fallback:', error);
+  }
+
   // 验证并使用用户 ID
   if (userId !== CURRENT_USER_ID) {
     console.warn('[LOGIN] User ID mismatch, updating:', userId);
@@ -540,12 +566,25 @@ async function loadConversations() {
     const response = await fetch(`${API_BASE}/api/v1/chat/conversations/${userId}`);
     if (!response.ok) throw new Error("请求失败");
     const data = await response.json();
-    conversationSidebar.renderConversations(data.data.conversations || []);
+    const conversations = data.data.conversations || [];
+    conversationSidebar.renderConversations(conversations);
 
-    // Set active conversation
-    if (conversationId) {
+    // 页面刷新后，自动加载最近对话（恢复上下文）
+    // 只在初始加载时执行，避免清除后重新加载
+    if (isInitialLoad && !conversationId && conversations.length > 0) {
+      const latestId = conversationSidebar.getLatestConversationId();
+      if (latestId) {
+        console.log(`[REFRESH] Auto-loading latest conversation: ${latestId}`);
+        conversationId = latestId;
+        conversationSidebar.setActive(latestId);
+        await loadHistory();
+      }
+    } else if (conversationId) {
+      // 如果已有 conversationId，设置活跃状态
       conversationSidebar.setActive(conversationId);
     }
+
+    isInitialLoad = false;
   } catch (err) {
     console.error("加载对话列表失败:", err);
     conversationSidebar.renderConversations([]);
@@ -1224,6 +1263,108 @@ document.querySelectorAll("[data-sheet-close]").forEach((el) => {
   el.addEventListener("click", closeSheet);
 });
 
+// ============ 归档对话功能 ============
+header.addEventListener("archive-conversation", async () => {
+  if (!conversationId) {
+    showBanner("当前没有活跃对话", "info");
+    return;
+  }
+
+  // 首先尝试不带 member_id 归档（适用于单成员或无成员场景）
+  try {
+    await performArchive(conversationId, null);
+  } catch (error) {
+    // 如果返回 400，说明需要选择成员
+    if (error.status === 400) {
+      await showMemberSelector(conversationId);
+    } else {
+      console.error('[ARCHIVE] Failed to archive:', error);
+      showBanner("归档失败，请重试", "info");
+    }
+  }
+});
+
+/**
+ * 显示成员选择器（当用户有多个成员时）
+ * @param {string} convId - 对话 ID
+ */
+async function showMemberSelector(convId) {
+  try {
+    // 获取用户的所有成员
+    const membersResponse = await fetch(`${API_BASE}/api/v1/profile/${CURRENT_USER_ID}/members`);
+
+    if (!membersResponse.ok) {
+      throw new Error('获取成员列表失败');
+    }
+
+    const membersData = await membersResponse.json();
+    const members = membersData.data?.members || [];
+
+    if (members.length === 0) {
+      // 无成员，直接归档
+      await performArchive(convId, null);
+      return;
+    }
+
+    // 显示成员选择器
+    const archiveModal = createArchiveConfirmModal({
+      multiMember: true,
+      members: members,
+      onConfirm: async (selectedMemberId) => {
+        await performArchive(convId, selectedMemberId);
+      },
+      onCancel: () => {
+        console.log('[ARCHIVE] User cancelled archive');
+      }
+    });
+    archiveModal.show();
+
+  } catch (error) {
+    console.error('[ARCHIVE] Failed to show member selector:', error);
+    showBanner("获取成员列表失败，请重试", "info");
+  }
+}
+
+/**
+ * 执行归档操作
+ * @param {string} convId - 对话 ID
+ * @param {string|null} memberId - 成员 ID（可选）
+ * @throws {Object} - 错误对象包含 status 和 message
+ */
+async function performArchive(convId, memberId) {
+  const payload = {};
+  if (memberId) {
+    payload.member_id = memberId;
+  }
+
+  const archiveResponse = await fetch(`${API_BASE}/api/v1/chat/conversations/${convId}/archive`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+
+  if (!archiveResponse.ok) {
+    const errorData = await archiveResponse.json().catch(() => ({}));
+    const error = new Error(errorData.detail || '归档失败');
+    error.status = archiveResponse.status;
+    throw error;
+  }
+
+  const data = await archiveResponse.json();
+  const summary = data.data?.summary || "对话已归档到健康档案";
+
+  showBanner(summary, "info");
+
+  // 清空当前对话
+  conversationId = null;
+  chat.innerHTML = "";
+  const welcome = createWelcomeScreen();
+  chat.appendChild(welcome);
+
+  // 重新加载对话列表
+  await loadConversations();
+}
+
 // Load conversations on startup
 loadConversations();
 
@@ -1352,14 +1493,39 @@ async function handleLoginSubmit() {
   // 生成简单的用户ID（可以根据需要改为 UUID）
   const generatedUserId = 'user_' + cleanedUserId.replace(/[^a-z0-9]/g, '');
 
-  // 🎨 软登录：直接接受用户输入，无需后端验证
-  // 保存到 localStorage
-  localStorage.setItem('pediatric_user_id', generatedUserId);
+  try {
+    // 🎨 调用后端 API 注册/验证用户
+    const response = await fetch(`${API_BASE}/api/v1/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user_id: generatedUserId,
+        display_name: userId.trim()
+      })
+    });
 
-  // 更新全局用户 ID
-  CURRENT_USER_ID = generatedUserId;
+    if (!response.ok) {
+      // Fallback: 如果后端未实现，使用前端本地存储
+      console.warn('[LOGIN] Backend register not available, using local storage');
+      localStorage.setItem('pediatric_user_id', generatedUserId);
+      CURRENT_USER_ID = generatedUserId;
+    } else {
+      const data = await response.json();
+      // 使用后端返回的 user_id
+      const validatedUserId = data.data?.user_id || generatedUserId;
+      localStorage.setItem('pediatric_user_id', validatedUserId);
+      CURRENT_USER_ID = validatedUserId;
+      console.log('[LOGIN] User registered via backend:', validatedUserId);
+    }
 
-  console.log('[LOGIN] User logged in:', generatedUserId);
+  } catch (error) {
+    // 网络错误或后端未实现，使用本地存储 fallback
+    console.warn('[LOGIN] Backend call failed, using local storage:', error);
+    localStorage.setItem('pediatric_user_id', generatedUserId);
+    CURRENT_USER_ID = generatedUserId;
+  }
+
+  console.log('[LOGIN] User logged in:', CURRENT_USER_ID);
 
   // 隐藏登录 Modal
   const loginModal = document.getElementById('login-modal');
@@ -1381,6 +1547,63 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // ============ 🎨 软登录功能 ============
+
+// ============ 归档提示功能 ============
+
+// 30分钟计时器
+let conversationStartTime = null;
+let thirtyMinuteTimer = null;
+
+// 启动30分钟计时器
+function startThirtyMinuteTimer() {
+  conversationStartTime = Date.now();
+  clearTimeout(thirtyMinuteTimer);
+
+  thirtyMinuteTimer = setTimeout(() => {
+    if (conversationId) {
+      showBanner("💡 提示：对话已持续30分钟，建议归档保存到健康档案", "info");
+    }
+  }, 30 * 60 * 1000); // 30分钟
+}
+
+// 重置计时器（当创建新对话或发送消息时）
+function resetThirtyMinuteTimer() {
+  if (conversationId) {
+    startThirtyMinuteTimer();
+  }
+}
+
+// 监听新对话创建
+const originalHandleNewConversation = handleNewConversation;
+handleNewConversation = async function() {
+  await originalHandleNewConversation();
+  startThirtyMinuteTimer();
+};
+
+// 监听消息发送（首条消息时启动计时器）
+const originalSendMessageStream = sendMessageStream;
+sendMessageStream = async function(text, retryCount = 0) {
+  if (!conversationStartTime && conversationId) {
+    startThirtyMinuteTimer();
+  }
+  return await originalSendMessageStream(text, retryCount);
+};
+
+// beforeunload 事件：页面关闭前提示归档
+window.addEventListener('beforeunload', (event) => {
+  // 仅当有活跃对话且对话时长超过5分钟时提示
+  if (conversationId && conversationStartTime) {
+    const duration = Date.now() - conversationStartTime;
+    const fiveMinutes = 5 * 60 * 1000;
+
+    if (duration > fiveMinutes) {
+      const message = '您有未归档的对话，确定要离开吗？';
+      event.preventDefault(); // 标准写法
+      event.returnValue = message; // Chrome 需要
+      return message; // 旧版浏览器
+    }
+  }
+});
 
 // 显示空状态（无成员）
 function showEmptyMemberState() {
