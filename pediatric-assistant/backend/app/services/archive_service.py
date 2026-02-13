@@ -1,12 +1,13 @@
 """
-归档服务 - 将对话归档到consultation_records表
+归档服务 - 将对话归档到 archived_conversations 表，并提取结构化健康数据到健康档案
 """
+import asyncio
 import json
 import sqlite3
 import threading
 from contextlib import contextmanager
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from loguru import logger
 
 from app.config import settings
@@ -34,10 +35,9 @@ class ArchiveService:
     def init_db(self) -> None:
         """初始化数据库表"""
         with self._connect() as conn:
-            # 创建consultation_records表
             conn.execute(
                 """
-                CREATE TABLE IF NOT EXISTS consultation_records (
+                CREATE TABLE IF NOT EXISTS archived_conversations (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     conversation_id TEXT UNIQUE,
                     member_id TEXT,
@@ -51,7 +51,7 @@ class ArchiveService:
                 """
             )
             conn.commit()
-            logger.info("consultation_records表初始化完成")
+            logger.info("archived_conversations 表初始化完成")
 
     async def archive_conversation(
         self,
@@ -60,37 +60,47 @@ class ArchiveService:
         medical_context: Optional[Any] = None
     ) -> Dict[str, Any]:
         """
-        归档对话到consultation_records
+        归档对话到 archived_conversations，并提取健康数据到档案
 
         Args:
             conversation_id: 对话ID
-            member_id: 用户ID
+            member_id: 用户/成员ID
             medical_context: 医疗上下文（可选，如果不提供则从DB加载）
 
         Returns:
-            Dict[str, Any]: 归档结果
+            Dict[str, Any]: 归档结果，包含健康数据提取摘要
         """
         try:
-            # 1. 获取MedicalContext
-            if medical_context is None:
-                # 从conversation_state_service获取
-                ctx = conversation_state_service.load_medical_context(conversation_id, member_id)
-                # 检查是否为新创建的空上下文（通过turn_count判断）
-                if not ctx or ctx.turn_count == 0:
-                    raise ValueError(f"未找到对话 {conversation_id} 的医疗上下文")
-            else:
+            ctx = None
+            summary = ""
+            health_extraction = {}
+
+            # 1. 获取 MedicalContext
+            if medical_context is not None:
                 ctx = medical_context
+            else:
+                try:
+                    ctx = conversation_state_service.load_medical_context(conversation_id, member_id)
+                    if ctx and ctx.turn_count == 0:
+                        ctx = None
+                except Exception as e:
+                    logger.warning(f"加载 MedicalContext 失败: {e}")
+                    ctx = None
 
             # 2. 生成摘要
-            summary = await self.generate_summary(conversation_id, ctx)
+            if ctx:
+                summary = await self.generate_summary(conversation_id, ctx)
+            else:
+                logger.warning(f"MedicalContext not found for {conversation_id}, using history fallback")
+                summary = await self._generate_summary_from_history(conversation_id)
 
-            # 3. 写入consultation_records
+            # 3. 写入 archived_conversations
             archived_at = datetime.now().isoformat()
 
             with self._connect() as conn:
                 conn.execute(
                     """
-                    INSERT INTO consultation_records (
+                    INSERT INTO archived_conversations (
                         conversation_id, member_id, chief_complaint,
                         medical_context, summary, triage_level,
                         created_at, archived_at
@@ -102,28 +112,180 @@ class ArchiveService:
                     (
                         conversation_id,
                         member_id,
-                        ctx.chief_complaint or "",
-                        ctx.to_db_json(),
+                        ctx.chief_complaint if ctx else "",
+                        ctx.to_db_json() if ctx else "{}",
                         summary,
-                        ctx.triage_level or "",
-                        ctx.created_at.isoformat(),
+                        ctx.triage_level if ctx else "",
+                        ctx.created_at.isoformat() if ctx else archived_at,
                         archived_at
                     )
                 )
                 conn.commit()
 
-            logger.info(f"对话 {conversation_id} 已归档")
+            logger.info(f"对话 {conversation_id} 已归档到 archived_conversations")
+
+            # 4. 提取结构化健康数据到健康档案（best-effort）
+            if ctx:
+                try:
+                    health_extraction = await self.extract_health_data_to_profile(
+                        member_id, ctx, conversation_id, summary
+                    )
+                except Exception as e:
+                    logger.error(f"健康数据提取失败（不影响归档）: {e}", exc_info=True)
+                    health_extraction = {"error": str(e)}
 
             return {
                 "conversation_id": conversation_id,
                 "member_id": member_id,
                 "summary": summary,
-                "archived_at": archived_at
+                "archived_at": archived_at,
+                "health_extraction": health_extraction
             }
 
         except Exception as e:
             logger.error(f"归档对话失败: {e}", exc_info=True)
             raise
+
+    async def extract_health_data_to_profile(
+        self,
+        member_id: str,
+        ctx: Any,
+        conversation_id: str,
+        summary: str = ""
+    ) -> Dict[str, Any]:
+        """
+        从 MedicalContext.slots 中提取结构化数据写入健康档案
+
+        提取项:
+        - 问诊记录: chief_complaint + summary → health_records_service.add_consultation()
+        - 过敏信息: allergy/过敏 → health_history_service.add_allergy()
+        - 用药信息: medication/用药 → health_history_service.add_medication_history()
+        - 体征数据: temperature/weight_kg → health_records_service.add_checkup()
+
+        Returns:
+            Dict[str, Any]: 提取结果摘要
+        """
+        from app.services.profile_service import health_records_service, health_history_service
+
+        result = {
+            "consultation": 0,
+            "allergy": 0,
+            "medication": 0,
+            "checkup": 0,
+        }
+
+        today = datetime.now().strftime("%Y-%m-%d")
+        slots = ctx.slots or {}
+
+        # 1. 问诊记录
+        try:
+            consultation_summary = summary or f"主诉：{ctx.chief_complaint or '未记录'}"
+            health_records_service.add_consultation(
+                member_id=member_id,
+                date=today,
+                summary=consultation_summary,
+                department="儿科",
+            )
+            result["consultation"] = 1
+            logger.info(f"已写入问诊记录: member={member_id}")
+        except Exception as e:
+            logger.warning(f"写入问诊记录失败: {e}")
+
+        # 2. 过敏信息
+        allergy_value = slots.get("allergy") or slots.get("过敏")
+        if allergy_value and allergy_value not in ("无", "没有", "无过敏", "不清楚", "unknown"):
+            try:
+                allergens = allergy_value if isinstance(allergy_value, list) else [allergy_value]
+                for allergen in allergens:
+                    if allergen and allergen.strip():
+                        health_history_service.add_allergy(
+                            member_id=member_id,
+                            allergen=allergen.strip(),
+                            reaction="对话中提及",
+                            severity="unknown",
+                            date=today,
+                        )
+                        result["allergy"] += 1
+                logger.info(f"已写入过敏记录: member={member_id}, count={result['allergy']}")
+            except Exception as e:
+                logger.warning(f"写入过敏记录失败: {e}")
+
+        # 3. 用药信息
+        medication_value = slots.get("medication") or slots.get("用药") or slots.get("current_medication")
+        if medication_value and medication_value not in ("无", "没有", "未用药", "不清楚", "unknown"):
+            try:
+                meds = medication_value if isinstance(medication_value, list) else [medication_value]
+                for med in meds:
+                    if med and med.strip():
+                        health_history_service.add_medication_history(
+                            member_id=member_id,
+                            drug_name=med.strip(),
+                            start_date=today,
+                            reason=ctx.chief_complaint or "对话中提及",
+                        )
+                        result["medication"] += 1
+                logger.info(f"已写入用药记录: member={member_id}, count={result['medication']}")
+            except Exception as e:
+                logger.warning(f"写入用药记录失败: {e}")
+
+        # 4. 体征数据（体温、体重等）
+        checkup_items = []
+        temperature = slots.get("temperature") or slots.get("体温")
+        if temperature:
+            checkup_items.append(f"体温: {temperature}")
+
+        weight_kg = slots.get("weight_kg") or slots.get("体重")
+        if weight_kg:
+            checkup_items.append(f"体重: {weight_kg}kg")
+
+        if checkup_items:
+            try:
+                health_records_service.add_checkup(
+                    member_id=member_id,
+                    date=today,
+                    checkup_type="对话体征记录",
+                    summary="、".join(checkup_items),
+                    results=json.dumps(
+                        {k: v for k, v in [
+                            ("temperature", temperature),
+                            ("weight_kg", weight_kg),
+                        ] if v},
+                        ensure_ascii=False
+                    ),
+                )
+                result["checkup"] = 1
+                logger.info(f"已写入体征记录: member={member_id}, items={checkup_items}")
+            except Exception as e:
+                logger.warning(f"写入体征记录失败: {e}")
+
+        return result
+
+    async def _generate_summary_from_history(self, conversation_id: str) -> str:
+        """
+        从对话历史消息生成摘要（MedicalContext 不可用时的回退方案）
+
+        Args:
+            conversation_id: 对话ID
+
+        Returns:
+            str: 摘要文本
+        """
+        try:
+            from app.services.conversation_service import conversation_service
+            history = conversation_service.get_history(conversation_id, limit=20)
+
+            if not history:
+                return "空对话，无内容可归档"
+
+            conversation_text = "\n".join([
+                f"{msg['role']}: {msg['content']}"
+                for msg in history
+            ])
+
+            return await self._call_llm_for_summary(conversation_text)
+        except Exception as e:
+            logger.error(f"从历史生成摘要失败: {e}", exc_info=True)
+            return "对话摘要生成失败（历史回退）"
 
     async def generate_summary(
         self,
@@ -135,39 +297,35 @@ class ArchiveService:
 
         Args:
             conversation_id: 对话ID
-            ctx: 医疗上下文（可选，如果不提供则从DB加载）
+            ctx: 医疗上下文（可选）
 
         Returns:
             str: 摘要文本
         """
         try:
-            # 如果没有提供ctx，从DB加载
             if ctx is None:
-                from app.services.conversation_service import conversation_service
-                history = conversation_service.get_history(conversation_id, limit=20)
+                return await self._generate_summary_from_history(conversation_id)
 
-                if not history:
-                    return "空对话，无内容"
-
-                # 构建对话文本
-                conversation_text = "\n".join([
-                    f"{msg['role']}: {msg['content']}"
-                    for msg in history
-                ])
-            else:
-                # 使用MedicalContext生成摘要
-                conversation_text = f"""
+            conversation_text = f"""
 主诉：{ctx.chief_complaint or "未记录"}
 症状：{ctx.get_symptom() or "未记录"}
 实体信息：{json.dumps(ctx.slots, ensure_ascii=False)}
 分诊结果：{ctx.triage_level or "未分诊"}
 """
+            return await self._call_llm_for_summary(conversation_text)
 
-            # 使用LLM生成摘要
-            prompt = f"""请为以下医疗咨询对话生成一个简洁的摘要（100-200字）：
+        except Exception as e:
+            logger.error(f"生成摘要失败: {e}", exc_info=True)
+            return self._generate_fallback_summary(ctx)
+
+    async def _call_llm_for_summary(self, conversation_text: str) -> str:
+        """
+        调用 LLM 生成摘要（使用 asyncio.to_thread 避免阻塞事件循环）
+        """
+        prompt = f"""请为以下医疗咨询对话生成一个简洁的摘要（100-200字）：
 
 对话内容：
-{conversation_text[:1000]}  # 限制输入长度
+{conversation_text[:1000]}
 
 要求：
 1. 总结患者的主要症状和诉求
@@ -177,11 +335,12 @@ class ArchiveService:
 
 直接输出摘要，不要添加标题或前缀。"""
 
-            if not llm_service.remote_available:
-                # 本地兜底：从MedicalContext提取关键信息
-                return self._generate_fallback_summary(ctx)
+        if not llm_service.remote_available:
+            return f"对话摘要（本地生成）：{conversation_text[:100]}..."
 
-            response = llm_service.client.chat.completions.create(
+        try:
+            response = await asyncio.to_thread(
+                llm_service.client.chat.completions.create,
                 model=llm_service.model,
                 messages=[
                     {"role": "system", "content": "你是一个专业的医疗对话摘要助手。"},
@@ -193,16 +352,13 @@ class ArchiveService:
 
             summary = response.choices[0].message.content.strip()
 
-            # 确保摘要长度合理
             if len(summary) > 300:
                 summary = summary[:297] + "..."
 
             return summary
-
         except Exception as e:
-            logger.error(f"生成摘要失败: {e}", exc_info=True)
-            # 返回基本摘要
-            return self._generate_fallback_summary(ctx)
+            logger.error(f"LLM 摘要调用失败: {e}", exc_info=True)
+            return f"对话摘要（本地生成）：{conversation_text[:100]}..."
 
     def _generate_fallback_summary(self, ctx: Optional[Any]) -> str:
         """本地兜底：生成简化摘要"""
@@ -221,20 +377,12 @@ class ArchiveService:
         return summary
 
     def get_archived_conversation(self, conversation_id: str) -> Optional[Dict[str, Any]]:
-        """
-        获取已归档的对话
-
-        Args:
-            conversation_id: 对话ID
-
-        Returns:
-            Optional[Dict[str, Any]]: 归档记录
-        """
+        """获取已归档的对话"""
         try:
             with self._connect() as conn:
                 row = conn.execute(
                     """
-                    SELECT * FROM consultation_records
+                    SELECT * FROM archived_conversations
                     WHERE conversation_id = ?
                     """,
                     (conversation_id,)
@@ -260,22 +408,14 @@ class ArchiveService:
             return None
 
     def get_member_archived_conversations(self, member_id: str) -> list:
-        """
-        获取用户的所有归档对话
-
-        Args:
-            member_id: 用户ID
-
-        Returns:
-            list: 归档记录列表
-        """
+        """获取用户的所有归档对话"""
         try:
             with self._connect() as conn:
                 rows = conn.execute(
                     """
                     SELECT id, conversation_id, chief_complaint, summary,
                            triage_level, created_at, archived_at
-                    FROM consultation_records
+                    FROM archived_conversations
                     WHERE member_id = ?
                     ORDER BY archived_at DESC
                     """,

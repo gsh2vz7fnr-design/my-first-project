@@ -662,10 +662,16 @@ async function handleDeleteConversation(convId) {
 }
 
 function showBanner(message, tone = "info") {
-  const banner = chat.querySelector(".chat-banner");
-  if (!banner) return;
+  let banner = chat.querySelector(".chat-banner");
+  if (!banner) {
+    banner = document.createElement("div");
+    banner.className = "chat-banner";
+    banner.setAttribute("role", "status");
+    banner.setAttribute("aria-live", "polite");
+    chat.appendChild(banner);
+  }
   banner.textContent = message;
-  banner.classList.remove("info", "warn");
+  banner.classList.remove("info", "warn", "success");
   banner.classList.add(tone);
   banner.dataset.visible = "true";
 }
@@ -1332,37 +1338,77 @@ async function showMemberSelector(convId) {
  * @throws {Object} - 错误对象包含 status 和 message
  */
 async function performArchive(convId, memberId) {
-  const payload = {};
+  const userId = getUserId();
+
+  if (!userId) {
+    console.error('[ARCHIVE] Missing user_id');
+    showBanner("无法获取用户信息，请尝试重新登录", "warn");
+    return;
+  }
+
+  // 禁用归档按钮 + 显示加载状态
+  const archiveBtn = header.querySelector("#archive-conversation-btn");
+  if (archiveBtn) {
+    archiveBtn.disabled = true;
+    archiveBtn.classList.add("loading");
+  }
+  showBanner("正在归档对话，请稍候…", "info");
+
+  const payload = {
+    user_id: userId
+  };
   if (memberId) {
     payload.member_id = memberId;
   }
 
-  const archiveResponse = await fetch(`${API_BASE}/api/v1/chat/conversations/${convId}/archive`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
+  console.log('[ARCHIVE] Sending archive request:', payload);
 
-  if (!archiveResponse.ok) {
-    const errorData = await archiveResponse.json().catch(() => ({}));
-    const error = new Error(errorData.detail || '归档失败');
-    error.status = archiveResponse.status;
-    throw error;
+  try {
+    const archiveResponse = await fetch(`${API_BASE}/api/v1/chat/conversations/${convId}/archive`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    if (!archiveResponse.ok) {
+      const errorData = await archiveResponse.json().catch(() => ({}));
+      const error = new Error(errorData.detail || '归档失败');
+      error.status = archiveResponse.status;
+      throw error;
+    }
+
+    const data = await archiveResponse.json();
+    const summary = data.data?.summary || "对话已归档";
+    const extraction = data.data?.health_extraction || {};
+
+    // 构建成功提示信息
+    let successMsg = `归档成功！${summary.substring(0, 40)}`;
+    const extractionParts = [];
+    if (extraction.consultation) extractionParts.push(`${extraction.consultation}条问诊记录`);
+    if (extraction.allergy) extractionParts.push(`${extraction.allergy}条过敏记录`);
+    if (extraction.medication) extractionParts.push(`${extraction.medication}条用药记录`);
+    if (extraction.checkup) extractionParts.push(`${extraction.checkup}条体征记录`);
+    if (extractionParts.length > 0) {
+      successMsg += `（已提取${extractionParts.join("、")}）`;
+    }
+
+    showBanner(successMsg, "success");
+
+    // 清空当前对话
+    conversationId = null;
+    chat.innerHTML = "";
+    const welcome = createWelcomeScreen();
+    chat.appendChild(welcome);
+
+    // 重新加载对话列表
+    await loadConversations();
+  } finally {
+    // 恢复归档按钮状态
+    if (archiveBtn) {
+      archiveBtn.disabled = false;
+      archiveBtn.classList.remove("loading");
+    }
   }
-
-  const data = await archiveResponse.json();
-  const summary = data.data?.summary || "对话已归档到健康档案";
-
-  showBanner(summary, "info");
-
-  // 清空当前对话
-  conversationId = null;
-  chat.innerHTML = "";
-  const welcome = createWelcomeScreen();
-  chat.appendChild(welcome);
-
-  // 重新加载对话列表
-  await loadConversations();
 }
 
 // Load conversations on startup

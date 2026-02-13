@@ -59,10 +59,14 @@ class TestArchiveService:
         assert len(result["summary"]) > 0
 
     @pytest.mark.asyncio
-    async def test_archive_conversation_not_found(self):
-        """TC-ARCHIVE-002: 归档不存在的对话应抛出异常"""
-        with pytest.raises(ValueError):
-            await self.service.archive_conversation("nonexistent_conv", "test_user")
+    async def test_archive_conversation_no_context_fallback(self):
+        """TC-ARCHIVE-002: 归档不存在上下文的对话应走回退逻辑"""
+        # With fallback logic, archiving without MedicalContext should
+        # generate summary from history (or return a fallback message)
+        result = await self.service.archive_conversation("nonexistent_conv", "test_user")
+        assert result["conversation_id"] == "nonexistent_conv"
+        assert "summary" in result
+        assert len(result["summary"]) > 0
 
     @pytest.mark.asyncio
     async def test_get_archived_conversation(self):

@@ -9,7 +9,8 @@
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from loguru import logger
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional
+from pydantic import BaseModel
 
 from app.models.user import ChatRequest, StreamChunk
 from app.services.chat_pipeline import get_chat_pipeline, PipelineResult
@@ -257,32 +258,61 @@ async def create_conversation(user_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class ArchiveRequest(BaseModel):
+    """归档请求"""
+    user_id: Optional[str] = None
+    member_id: Optional[str] = None
+
+
 @router.post("/conversations/{conversation_id}/archive")
-async def archive_conversation(conversation_id: str, user_id: str):
+async def archive_conversation(conversation_id: str, request: ArchiveRequest):
     """
     归档对话到consultation_records
 
     Args:
         conversation_id: 对话ID
-        user_id: 用户ID（通过查询参数传递）
+        request: 归档请求（包含 user_id 或 member_id）
 
     Returns:
         dict: 归档结果
     """
     try:
-        # 归档对话
-        result = await archive_service.archive_conversation(conversation_id, user_id)
+        logger.info(f"Archive request for {conversation_id}: {request.model_dump()}")
+        target_id = request.member_id or request.user_id
+        if not target_id:
+            raise HTTPException(status_code=400, detail="必须提供 user_id 或 member_id")
+
+        # 归档对话（包含健康数据提取）
+        result = await archive_service.archive_conversation(conversation_id, target_id)
 
         # 标记会话为已归档
-        conversation_service.mark_archived(conversation_id, user_id)
+        conversation_service.mark_archived(conversation_id, target_id)
+
+        # 构建响应消息
+        extraction = result.get("health_extraction", {})
+        extraction_parts = []
+        if extraction.get("consultation"):
+            extraction_parts.append(f"{extraction['consultation']}条问诊记录")
+        if extraction.get("allergy"):
+            extraction_parts.append(f"{extraction['allergy']}条过敏记录")
+        if extraction.get("medication"):
+            extraction_parts.append(f"{extraction['medication']}条用药记录")
+        if extraction.get("checkup"):
+            extraction_parts.append(f"{extraction['checkup']}条体征记录")
+
+        message = "对话已成功归档"
+        if extraction_parts:
+            message += f"，已提取{'、'.join(extraction_parts)}到健康档案"
 
         return {
             "code": 0,
             "data": result,
-            "message": "对话已成功归档"
+            "message": message
         }
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"归档对话失败: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

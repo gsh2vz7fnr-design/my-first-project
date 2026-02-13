@@ -144,6 +144,17 @@ body {
   height: 20px;
 }
 
+.header-icon-btn.loading {
+  opacity: 0.5;
+  pointer-events: none;
+  animation: btn-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes btn-pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 0.3; }
+}
+
 /* Header Bottom - 分段控制器 (Tabs) */
 .header-bottom {
   display: flex;
@@ -467,6 +478,12 @@ body {
   background: var(--emergency-50);
   border-color: var(--emergency-200);
   color: var(--emergency-700);
+}
+
+.chat-banner.success {
+  background: #ecfdf5;
+  border-color: #a7f3d0;
+  color: #065f46;
 }
 
 /* Messages */
