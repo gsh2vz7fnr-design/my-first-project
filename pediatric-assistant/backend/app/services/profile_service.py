@@ -302,7 +302,7 @@ class ProfileService:
             # 如果不存在，创建空档案
             return HealthProfile(
                 user_id=user_id,
-                baby_info=BabyInfo(age_months=0, gender=None),
+                baby_info=BabyInfo(age_months=None, gender=None),
                 allergy_history=[],
                 medical_history=[],
                 medication_history=[],

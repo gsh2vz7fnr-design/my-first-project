@@ -477,6 +477,10 @@ class LLMService:
         if accumulated_slots:
             prompt += "前几轮已收集的信息：\n"
             for k, v in accumulated_slots.items():
+                # ⚠️ 核心过滤逻辑：如果 age_months 为 0 或 None，直接跳过，不写入 Prompt
+                if k == "age_months" and (v is None or v == 0):
+                    self.log.debug("Filtered invalid age_months: {} from LLM prompt", v)
+                    continue
                 prompt += f"- {k}: {v}\n"
             prompt += "\n请基于以上已知信息，从本轮用户输入中提取**新增**的意图和实体。已有信息无需重复提取。\n"
         else:
@@ -1107,6 +1111,7 @@ class LLMService:
             return self._generate_fallback_triage_response(user_context)
 
         try:
+            self.log.debug("[LLM] 开始生成结构化分诊响应，prompt长度: {}", len(prompt))
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -1116,7 +1121,9 @@ class LLMService:
                 temperature=0.7,
                 max_tokens=300
             )
-            return response.choices[0].message.content.strip()
+            result = response.choices[0].message.content.strip()
+            self.log.info("[LLM] 结构化分诊响应生成成功，长度: {}", len(result))
+            return result
         except Exception as e:
             self.log.error("生成结构化分诊响应失败: {}", e, exc_info=True)
             self.remote_available = False

@@ -1534,8 +1534,19 @@ async function handleLoginSubmit() {
   // 重新加载对话列表（使用新的 user_id）
   await loadConversations();
 
-  // 显示成功提示
-  showBanner(`欢迎回来，${cleanedUserId}！`, 'success');
+  // 显示成功提示（根据时间显示问候语）
+  const hour = new Date().getHours();
+  let greeting;
+  if (hour >= 6 && hour < 12) {
+    greeting = '上午好';
+  } else if (hour >= 12 && hour < 14) {
+    greeting = '中午好';
+  } else if (hour >= 14 && hour < 19) {
+    greeting = '下午好';
+  } else {
+    greeting = '晚上好';
+  }
+  showBanner(`${greeting}，${cleanedUserId}！`, 'success');
 }
 
 // 页面加载时初始化登录功能

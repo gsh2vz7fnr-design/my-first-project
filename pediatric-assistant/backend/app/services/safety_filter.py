@@ -187,7 +187,10 @@ class SafetyFilter:
         disclaimer = "\n\n*AI生成内容仅供参考，不作为医疗诊断依据。请以线下医生医嘱为准。*"
 
         # 如果文本已经包含免责声明，不重复添加
-        if "*AI生成内容仅供参考" in text:
+        # 检查两种可能的免责声明格式：
+        # 1. LLM 系统提示词生成的格式："以上为 AI 参考建议"
+        # 2. safety_filter 生成的格式："*AI生成内容仅供参考"
+        if ("*AI生成内容仅供参考" in text or "AI 参考建议" in text or "AI参考建议" in text):
             return text
 
         return text + disclaimer

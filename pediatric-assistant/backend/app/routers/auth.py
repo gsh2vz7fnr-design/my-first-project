@@ -52,13 +52,13 @@ async def register_user(request: RegisterRequest):
 @router.get("/user/{user_id}")
 async def get_user(user_id: str):
     """
-    获取用户信息
+    获取用户信息（验证用户ID有效性）
 
     Args:
         user_id: 用户ID
 
     Returns:
-        dict: 用户信息
+        dict: 用户信息 + valid 字段
     """
     try:
         user = conversation_service.get_user(user_id)
@@ -66,10 +66,12 @@ async def get_user(user_id: str):
         if user is None:
             return {
                 "code": 404,
-                "data": None,
+                "data": {"valid": False},
                 "message": "用户不存在"
             }
 
+        # 添加 valid 字段，前端依赖此字段判断用户ID是否有效
+        user["valid"] = True
         return {
             "code": 0,
             "data": user,

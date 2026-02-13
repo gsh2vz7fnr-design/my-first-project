@@ -72,10 +72,11 @@ class RAGService:
         # 确定是否使用 ChromaDB
         self._use_chromadb = use_chromadb if use_chromadb is not None else settings.USE_CHROMADB
 
-        # LLM 客户端
+        # LLM 客户端（添加30秒超时，避免无限等待）
         self.client = OpenAI(
             api_key=settings.DEEPSEEK_API_KEY,
-            base_url=settings.DEEPSEEK_BASE_URL
+            base_url=settings.DEEPSEEK_BASE_URL,
+            timeout=30
         )
         self.chat_model = settings.DEEPSEEK_MODEL
 
@@ -581,6 +582,7 @@ class RAGService:
                     has_source=True
                 )
 
+            logger.info(f"[RAG] 开始生成答案，query长度: {len(query)}, sources数量: {len(sources)}")
             response = self.client.chat.completions.create(
                 model=self.chat_model,
                 messages=[
@@ -591,6 +593,7 @@ class RAGService:
             )
 
             answer = response.choices[0].message.content
+            logger.info(f"[RAG] 答案生成成功，长度: {len(answer)}")
 
             return RAGResult(
                 answer=self.format_with_citations(answer, sources),

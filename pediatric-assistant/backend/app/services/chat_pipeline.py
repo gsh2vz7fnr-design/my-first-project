@@ -181,9 +181,13 @@ class ChatPipeline:
         }
 
         # Auto-fill age_months from profile if available and not already in context
+        # 仅当年龄在合理范围内 (1-36个月) 才自动填充
         if profile.baby_info.age_months is not None and "age_months" not in ctx.slots:
-            ctx.slots["age_months"] = profile.baby_info.age_months
-            self.log.info("Auto-filled age_months from profile: {}", profile.baby_info.age_months)
+            if 0 < profile.baby_info.age_months <= 36:
+                ctx.slots["age_months"] = profile.baby_info.age_months
+                self.log.info("Auto-filled age_months from profile: {}", profile.baby_info.age_months)
+            else:
+                self.log.debug("Skipped invalid age_months from profile: {} (valid range: 1-36)", profile.baby_info.age_months)
 
         # Step 4: LLM 提取意图+实体（传入已累积的 slots 作为上下文）
         intent_result = await llm_service.extract_intent_and_entities(
