@@ -703,24 +703,12 @@ async function loadConversations() {
     });
     conversationSidebar.renderConversations(conversations);
 
-    // 页面刷新后，自动加载最近对话（恢复上下文）
-    // 只在初始加载时执行，避免清除后重新加载
-    if (isInitialLoad && !conversationId && conversations.length > 0) {
-      const latestId = conversationSidebar.getLatestConversationId();
-      if (latestId) {
-        console.log(`[REFRESH] Auto-loading latest conversation: ${latestId}`);
-        const latestMemberId = conversationMemberMap[latestId];
-        if (latestMemberId && latestMemberId !== currentMemberId) {
-          const member = cachedMembers.find((m) => m.id === latestMemberId);
-          currentMemberId = latestMemberId;
-          currentMemberName = member?.name || "默认成员";
-          persistActiveMember(currentMemberId);
-          syncMemberUIEverywhere();
-        }
-        conversationId = latestId;
-        conversationSidebar.setActive(latestId);
-        await loadHistory();
-      }
+    // 刷新页面后默认回到欢迎态，不自动回填历史会话，避免归档后仍“看起来在旧会话里”
+    // 用户手动点击侧边栏会话时再加载历史内容。
+    if (isInitialLoad) {
+      conversationId = null;
+      conversationSidebar.setActive(null);
+      resetChatToWelcome();
     } else if (conversationId) {
       // 如果已有 conversationId，设置活跃状态
       conversationSidebar.setActive(conversationId);
@@ -1657,16 +1645,12 @@ async function sendMessage() {
 }
 
 composer.refs.button.addEventListener("click", () => {
-  showBanner("更多功能入口开发中，可直接按 Enter 发送消息。", "info");
+  sendMessage();
 });
 composer.refs.input.addEventListener("keydown", (event) => {
   if (event.key === "Enter") {
     sendMessage();
   }
-});
-
-composer.refs.voiceToggle?.addEventListener("click", () => {
-  showBanner("语音输入功能开发中，暂可使用文字输入。", "info");
 });
 
 // ============ 健康档案数据加载 ============

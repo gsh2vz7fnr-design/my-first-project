@@ -532,18 +532,15 @@ function createComposer() {
   inputWrapper.className = "composer-input-wrapper";
 
   inputWrapper.innerHTML = `
-    <button class="composer-voice-toggle" aria-label="语音输入" type="button">
-      <span aria-hidden="true">🎤</span>
-    </button>
     <input
       class="composer-input"
       type="text"
-      placeholder="发消息或按住说话..."
+      placeholder="发消息..."
       aria-label="输入您的消息"
       aria-describedby="composer-hint"
     />
-    <button class="composer-send" aria-label="更多功能" type="submit">
-      +
+    <button class="composer-send" aria-label="发送消息" type="submit">
+      发送
     </button>
   `;
 
@@ -573,7 +570,6 @@ function createComposer() {
     refs: {
       input: footer.querySelector(".composer-input"),
       button: footer.querySelector(".composer-send"),
-      voiceToggle: footer.querySelector(".composer-voice-toggle"),
       memberPill: footer.querySelector(".composer-member-pill"),
       profileLink: footer.querySelector(".composer-profile-link"),
     },
