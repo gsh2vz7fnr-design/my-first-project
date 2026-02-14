@@ -11,8 +11,9 @@ from fastapi.responses import StreamingResponse
 from loguru import logger
 from typing import AsyncGenerator, Optional
 from pydantic import BaseModel
+from datetime import date
 
-from app.models.user import ChatRequest, StreamChunk
+from app.models.user import ChatRequest, StreamChunk, MemberProfile, Relationship, Gender
 from app.services.chat_pipeline import get_chat_pipeline, PipelineResult
 from app.services.stream_filter import StreamSafetyFilter
 from app.services.rag_service import get_rag_service
@@ -63,6 +64,35 @@ def _resolve_member_for_chat(
         return members[0]["id"]
     # 聊天接口保持向后兼容：无成员/多成员时允许不绑定 member_id
     return None
+
+
+def _ensure_default_member_for_user(user_id: str) -> str:
+    """
+    软登录用户兜底：当用户尚未创建成员时，自动创建一个默认就诊人，
+    避免归档流程被阻塞。
+    """
+    existing_members = member_profile_service.get_members(user_id)
+    if existing_members:
+        return existing_members[0]["id"]
+
+    default_member = MemberProfile(
+        id=f"member_{user_id}_default",
+        user_id=user_id,
+        name="默认就诊人",
+        relationship=Relationship.CHILD,
+        gender=Gender.MALE,
+        birth_date=date.today().isoformat(),
+    )
+    try:
+        member_id = member_profile_service.create_member(default_member)
+        logger.info(f"Auto-created default member for user {user_id}: {member_id}")
+        return member_id
+    except Exception:
+        # 并发场景下可能已被其他请求创建，重读一次
+        fallback_members = member_profile_service.get_members(user_id)
+        if fallback_members:
+            return fallback_members[0]["id"]
+        raise
 
 
 @router.post("/send")
@@ -384,13 +414,7 @@ async def archive_conversation(conversation_id: str, request: ArchiveRequest):
                 if len(members) == 1:
                     target_id = members[0]["id"]
                 elif len(members) == 0:
-                    raise HTTPException(
-                        status_code=400,
-                        detail={
-                            "code": "need_member_creation",
-                            "message": "请先创建就诊人档案后再归档。",
-                        }
-                    )
+                    target_id = _ensure_default_member_for_user(request.user_id)
                 else:
                     raise HTTPException(
                         status_code=400,

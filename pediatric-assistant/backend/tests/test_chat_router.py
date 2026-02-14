@@ -254,21 +254,36 @@ class TestArchiveMemberGuards:
         mock_mark_archived.assert_not_called()
 
     @pytest.mark.asyncio
+    @patch("app.routers.chat.conversation_service.mark_archived", return_value=True)
+    @patch("app.routers.chat.archive_service.archive_conversation", new_callable=AsyncMock)
+    @patch("app.routers.chat.member_profile_service.create_member", return_value="member_user_1001_default")
+    @patch("app.routers.chat.conversation_service.bind_member", return_value="member_user_1001_default")
     @patch("app.routers.chat.conversation_service.get_bound_member_id", return_value=None)
     @patch("app.routers.chat.member_profile_service.get_members", return_value=[])
-    async def test_archive_need_member_creation(
+    async def test_archive_auto_create_member_when_empty(
         self,
         mock_get_members,
         mock_get_bound_member_id,
+        mock_bind_member,
+        mock_create_member,
+        mock_archive_conversation,
+        mock_mark_archived,
         client
     ):
+        mock_archive_conversation.return_value = {
+            "conversation_id": "conv_test",
+            "health_extraction": {},
+            "summary": "ok"
+        }
         response = await client.post(
             "/api/v1/chat/conversations/conv_test/archive",
             json={"user_id": "user_1001"}
         )
-        assert response.status_code == 400
-        detail = response.json()["detail"]
-        assert detail["code"] == "need_member_creation"
+        assert response.status_code == 200
+        mock_create_member.assert_called_once()
+        mock_bind_member.assert_called_once_with("conv_test", "user_1001", "member_user_1001_default")
+        mock_archive_conversation.assert_awaited_once_with("conv_test", "member_user_1001_default")
+        mock_mark_archived.assert_called_once_with("conv_test", "member_user_1001_default")
 
     @pytest.mark.asyncio
     @patch("app.routers.chat.conversation_service.get_bound_member_id", return_value=None)
