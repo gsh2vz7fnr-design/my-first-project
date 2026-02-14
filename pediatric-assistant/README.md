@@ -94,6 +94,7 @@ pytest tests/ -v
 | **[STATUS.md](docs/STATUS.md)** | 系统状态、最新更新、待办事项 |
 | **[TODO_FIX_PLAN.md](docs/TODO_FIX_PLAN.md)** | 问题修复计划与详细进度 |
 | **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** | 技术架构、系统设计 |
+| **[DOC_VERSIONING_POLICY.md](docs/DOC_VERSIONING_POLICY.md)** | 三类核心文档版本化管理规范 |
 | **[API 文档](http://localhost:8000/docs)** | 启动后端访问自动生成的 OpenAPI 文档 |
 
 ---
@@ -154,10 +155,18 @@ pediatric-assistant/
 │   ├── STATUS.md            # 系统状态（最新）
 │   ├── TODO_FIX_PLAN.md    # 修复计划（最新）
 │   ├── ARCHITECTURE.md      # 技术架构
+│   ├── DOC_VERSIONING_POLICY.md # 文档版本管理规范
 │   └── archive/             # 归档文档
 │       ├── progress.md        # 旧进度日志
 │       ├── task_plan.md       # 原始任务规划
 │       └── findings.md        # 需求分析文档
+│
+├── versions/               # 版本化文档快照
+│   ├── v3.5/
+│   └── v4.1/
+│       ├── requirements/      # 需求文档版本快照
+│       ├── development/       # 开发文档版本快照
+│       └── bugfix/            # Bug修复文档版本快照
 │
 └── README.md               # 本文件
 ```
