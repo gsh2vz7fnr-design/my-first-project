@@ -1,0 +1,29 @@
+version: '3.9'
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "${POSTGRES_PORT}:5432"
+  redis:
+    image: redis:7
+    ports:
+      - "${REDIS_PORT}:6379"
+  api:
+    build: ./apps/api
+    env_file: .env
+    ports:
+      - "${API_PORT}:8000"
+    depends_on: [db, redis]
+  web:
+    image: node:20
+    working_dir: /app
+    command: sh -c "npm install && npm run dev -- --host"
+    volumes:
+      - ./apps/web:/app
+    ports:
+      - "${WEB_PORT}:5173"
+    depends_on: [api]
