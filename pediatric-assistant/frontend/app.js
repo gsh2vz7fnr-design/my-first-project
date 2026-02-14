@@ -1,5 +1,10 @@
 // Note: components.js is loaded as a regular script, so all functions are global
-const API_BASE = "http://localhost:8000";
+const API_BASE = (() => {
+  const apiFromQuery = new URLSearchParams(window.location.search).get("api");
+  const apiFromStorage = localStorage.getItem("pediatric_api_base");
+  return apiFromQuery || apiFromStorage || "http://localhost:8000";
+})();
+localStorage.setItem("pediatric_api_base", API_BASE);
 
 // Global user ID - can be updated via soft login
 let CURRENT_USER_ID = "test_user_001";
@@ -8,6 +13,7 @@ let currentMemberId = null;
 let currentMemberName = "默认成员";
 let cachedMembers = [];
 let conversationMemberMap = {};
+let archiveInFlight = false;
 
 // Helper function to get current user ID
 function getUserId() {
@@ -1444,15 +1450,23 @@ document.querySelectorAll("[data-sheet-close]").forEach((el) => {
 
 // ============ 归档对话功能 ============
 header.addEventListener("archive-conversation", async () => {
+  if (archiveInFlight) {
+    showBanner("归档进行中，请稍候…", "info");
+    return;
+  }
+
   if (!conversationId) {
     showBanner("当前没有活跃对话", "info");
     return;
   }
 
+  // 优先当前就诊人，兜底使用会话已绑定成员，减少 member_id 丢失
+  const archiveMemberId = currentMemberId || conversationMemberMap[conversationId] || null;
+
   // 优先使用当前就诊人，避免归档落到错误成员
-  if (currentMemberId) {
+  if (archiveMemberId) {
     try {
-      await performArchive(conversationId, currentMemberId);
+      await performArchive(conversationId, archiveMemberId);
     } catch (error) {
       if (error.code === "member_mismatch") {
         showBanner("当前会话已绑定其他就诊人，请切换后新建会话。", "warn");
@@ -1489,7 +1503,7 @@ header.addEventListener("archive-conversation", async () => {
 async function showMemberSelector(convId) {
   try {
     // 获取用户的所有成员
-    const membersResponse = await fetch(`${API_BASE}/api/v1/profile/${CURRENT_USER_ID}/members`);
+    const membersResponse = await fetch(`${API_BASE}/api/v1/profile/${getUserId()}/members`);
 
     if (!membersResponse.ok) {
       throw new Error('获取成员列表失败');
@@ -1532,6 +1546,10 @@ async function showMemberSelector(convId) {
 async function performArchive(convId, memberId) {
   const userId = getUserId();
 
+  if (archiveInFlight) {
+    return;
+  }
+
   if (!userId) {
     console.error('[ARCHIVE] Missing user_id');
     showBanner("无法获取用户信息，请尝试重新登录", "warn");
@@ -1540,6 +1558,7 @@ async function performArchive(convId, memberId) {
 
   // 禁用归档按钮 + 显示加载状态
   const archiveBtn = header.querySelector("#archive-conversation-btn");
+  archiveInFlight = true;
   if (archiveBtn) {
     archiveBtn.disabled = true;
     archiveBtn.classList.add("loading");
@@ -1599,6 +1618,7 @@ async function performArchive(convId, memberId) {
     // 重新加载对话列表
     await loadConversations();
   } finally {
+    archiveInFlight = false;
     // 恢复归档按钮状态
     if (archiveBtn) {
       archiveBtn.disabled = false;
