@@ -341,6 +341,12 @@ header.addEventListener("tabchange", (e) => {
   handleTabChange(e.detail);
 });
 
+// Listen for menu toggle from header (open conversation sidebar)
+header.addEventListener("menu-toggle", () => {
+  conversationSidebar.element.classList.add("open");
+  sidebarBackdrop.classList.add("open");
+});
+
 composer.refs.memberPill?.addEventListener("click", () => {
   showConsultMemberSelector();
 });
