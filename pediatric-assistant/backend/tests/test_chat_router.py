@@ -227,3 +227,90 @@ class TestEdgeCases:
         assert "mental_state" in result.entities
         assert "duration" in result.entities
         assert "temperature" in result.entities
+
+
+class TestArchiveMemberGuards:
+    """归档接口的成员一致性与解析规则"""
+
+    @pytest.mark.asyncio
+    @patch("app.routers.chat.conversation_service.mark_archived", return_value=True)
+    @patch("app.routers.chat.archive_service.archive_conversation", new_callable=AsyncMock)
+    @patch("app.routers.chat.conversation_service.get_bound_member_id", return_value="member_A")
+    async def test_archive_member_mismatch_rejected(
+        self,
+        mock_get_bound_member_id,
+        mock_archive_conversation,
+        mock_mark_archived,
+        client
+    ):
+        response = await client.post(
+            "/api/v1/chat/conversations/conv_test/archive",
+            json={"user_id": "user_1001", "member_id": "member_B"}
+        )
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        assert detail["code"] == "member_mismatch"
+        mock_archive_conversation.assert_not_called()
+        mock_mark_archived.assert_not_called()
+
+    @pytest.mark.asyncio
+    @patch("app.routers.chat.conversation_service.get_bound_member_id", return_value=None)
+    @patch("app.routers.chat.member_profile_service.get_members", return_value=[])
+    async def test_archive_need_member_creation(
+        self,
+        mock_get_members,
+        mock_get_bound_member_id,
+        client
+    ):
+        response = await client.post(
+            "/api/v1/chat/conversations/conv_test/archive",
+            json={"user_id": "user_1001"}
+        )
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        assert detail["code"] == "need_member_creation"
+
+    @pytest.mark.asyncio
+    @patch("app.routers.chat.conversation_service.get_bound_member_id", return_value=None)
+    @patch(
+        "app.routers.chat.member_profile_service.get_members",
+        return_value=[{"id": "member_A"}, {"id": "member_B"}]
+    )
+    async def test_archive_need_member_selection(
+        self,
+        mock_get_members,
+        mock_get_bound_member_id,
+        client
+    ):
+        response = await client.post(
+            "/api/v1/chat/conversations/conv_test/archive",
+            json={"user_id": "user_1001"}
+        )
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        assert detail["code"] == "need_member_selection"
+
+
+class TestSendMemberGuards:
+    """聊天接口的成员隔离规则"""
+
+    @pytest.mark.asyncio
+    @patch("app.routers.chat.conversation_service.get_bound_member_id", return_value="member_A")
+    async def test_send_member_mismatch_rejected(self, mock_get_bound_member_id, client):
+        response = await client.post("/api/v1/chat/send", json={
+            "user_id": "test_user_route",
+            "conversation_id": "conv_member_lock",
+            "member_id": "member_B",
+            "message": "你好"
+        })
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        assert detail["code"] == "member_mismatch"
+
+    @pytest.mark.asyncio
+    async def test_send_without_member_still_works(self, client):
+        response = await client.post("/api/v1/chat/send", json={
+            "user_id": "test_user_route",
+            "message": "你好"
+        })
+        assert response.status_code == 200

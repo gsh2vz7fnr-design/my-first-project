@@ -1,7 +1,7 @@
 # 开发指南 - 智能儿科分诊与护理助手
 
-> 版本: 1.0
-> 更新日期: 2026-02-06
+> 版本: 1.1
+> 更新日期: 2026-02-14
 
 ---
 
@@ -36,7 +36,12 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
 ### 4. 启动前端
 
-直接在浏览器中打开 `frontend/index.html`
+```bash
+cd frontend
+python3 -m http.server 8002
+```
+
+访问: http://localhost:8002
 
 ---
 
@@ -92,6 +97,7 @@ Content-Type: application/json
 
 {
   "user_id": "test_user_001",
+  "member_id": "optional_member_id",
   "conversation_id": "optional_conversation_id",
   "message": "宝宝发烧38度怎么办"
 }
@@ -105,6 +111,40 @@ data: {"type": "content", "content": "部分回复内容"}
 
 data: {"type": "done"}
 ```
+
+成员一致性约束：
+- 若 `conversation_id` 已绑定其他 `member_id`，接口返回 `member_mismatch`
+- 前端收到 `member_mismatch` 后，必须提示用户新建会话，不可继续沿用旧会话
+
+#### 发送消息（非流式）
+```
+POST /api/v1/chat/send
+Content-Type: application/json
+
+{
+  "user_id": "test_user_001",
+  "member_id": "optional_member_id",
+  "conversation_id": "optional_conversation_id",
+  "message": "宝宝昨晚发烧到39度"
+}
+```
+
+#### 归档会话
+```
+POST /api/v1/chat/archive
+Content-Type: application/json
+
+{
+  "user_id": "test_user_001",
+  "conversation_id": "required_conversation_id",
+  "member_id": "optional_for_double_check"
+}
+```
+
+归档规则：
+- 会话归档以会话记录中已绑定的 `member_id` 为准
+- 若请求体携带 `member_id` 且与会话绑定不一致，返回 `member_mismatch` 并拒绝归档
+- 若用户无成员档案，返回 `need_member_creation`
 
 #### 获取对话历史
 ```
@@ -187,6 +227,27 @@ cat evaluation_report.json
 - **输入安全**: 检查处方意图、黑名单关键词
 - **输出安全**: 流式输出时实时检测违禁词
 - **合规要求**: 拒绝开具处方、不能确诊疾病
+
+### 5. 多成员会话隔离（新增）
+
+- 首条消息确定并绑定会话 `member_id`（不可变）
+- 切换就诊人时，前端需要清空当前会话上下文并创建新会话
+- 前端使用 `localStorage` 持久化 `last_active_member_id:<user_id>`，刷新后恢复
+- `age_months` 在推理阶段可由用户输入兜底，但档案与长期上下文应以 `birth_date` 动态计算
+
+### 6. 数据迁移脚本
+
+为解决历史数据中 `user_id/member_id` 混用问题，新增迁移脚本：
+
+```bash
+cd backend
+python scripts/migrate_user_member_records.py --dry-run
+python scripts/migrate_user_member_records.py --apply
+```
+
+说明：
+- `--dry-run` 只输出待迁移统计，不写入数据库
+- `--apply` 实际执行迁移，将旧记录统一绑定到真实成员
 
 ---
 

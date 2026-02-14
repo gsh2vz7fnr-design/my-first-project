@@ -11,6 +11,7 @@
 | `setup_env.sh` | Linux/Mac环境设置脚本 |
 | `setup_env.bat` | Windows环境设置脚本 |
 | `verify_setup.py` | 环境验证脚本 |
+| `migrate_user_member_records.py` | 迁移历史 `member_id=user_xxx` 医疗记录到真实成员ID |
 
 ## 快速开始
 
@@ -130,6 +131,29 @@ python scripts/ingest_md_to_vector.py \
 | `--api-base` | API Base URL | 从.env读取 |
 | `--use-openai` | 使用OpenAI而非硅基流动 | False |
 | `--no-preview` | 跳过预览确认 | False |
+
+## 成员数据迁移（新增）
+
+当历史数据把 `user_id` 误写进医疗表的 `member_id` 字段时，可用以下脚本迁移：
+
+```bash
+# 先 dry-run 查看影响行数
+python scripts/migrate_user_member_records.py \
+  --from-user-id user_1001 \
+  --to-member-id member_abcd1234 \
+  --dry-run
+
+# 确认后执行
+python scripts/migrate_user_member_records.py \
+  --from-user-id user_1001 \
+  --to-member-id member_abcd1234 \
+  --apply
+```
+
+默认覆盖表：
+- `consultation_records`
+- `checkup_records`
+- `archived_conversations`
 
 ## 环境变量
 

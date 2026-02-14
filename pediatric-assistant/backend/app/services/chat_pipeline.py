@@ -143,7 +143,8 @@ class ChatPipeline:
         self,
         user_id: str,
         message: str,
-        conversation_id: Optional[str] = None
+        conversation_id: Optional[str] = None,
+        member_id: Optional[str] = None
     ) -> PipelineResult:
         """
         处理用户消息
@@ -159,17 +160,41 @@ class ChatPipeline:
         # Step 1: 解析 conversation_id，加载/创建 MedicalContext
         conversation_id = conversation_id or f"conv_{uuid.uuid4().hex[:12]}"
         set_session_id(conversation_id)  # 注入日志上下文
-        ctx = conversation_state_service.load_medical_context(conversation_id, user_id)
+        bound_member_id = conversation_service.get_bound_member_id(conversation_id)
+        effective_member_id = member_id or bound_member_id
+
+        # 会话一旦绑定 member_id，不允许切换
+        if member_id and bound_member_id and member_id != bound_member_id:
+            raise ValueError(f"member_mismatch:{bound_member_id}")
+
+        if effective_member_id:
+            conversation_service.bind_member(conversation_id, user_id, effective_member_id)
+
+        ctx = conversation_state_service.load_medical_context(
+            conversation_id,
+            user_id,
+            member_id=effective_member_id
+        )
         ctx.increment_turn()
         self.log.info("Turn {} | user_input={}", ctx.turn_count, message[:80])
 
         # Step 2: 处方意图安全拦截
         if safety_filter.check_prescription_intent(message):
-            conversation_service.append_message(conversation_id, user_id, "user", message)
+            conversation_service.append_message(
+                conversation_id,
+                user_id,
+                "user",
+                message,
+                member_id=effective_member_id
+            )
             return PipelineResult(
                 conversation_id=conversation_id,
                 message=safety_filter.get_prescription_refusal_message(),
-                metadata={"blocked": True, "reason": "prescription_intent"}
+                metadata={
+                    "blocked": True,
+                    "reason": "prescription_intent",
+                    "member_id": effective_member_id
+                }
             )
 
         # Step 3: 加载用户档案
@@ -203,8 +228,10 @@ class ChatPipeline:
         self.log.info("Slot Update: delta={}", entities_delta)
 
         # Step 6: 首次 triage 消息记为 chief_complaint
+        is_first_turn_triage = False
         if intent_result.intent.type == "triage" and ctx.chief_complaint is None:
             ctx.chief_complaint = message
+            is_first_turn_triage = True
 
         # Step 7: 必要时从历史恢复 symptom
         symptom = ctx.get_symptom()
@@ -240,7 +267,8 @@ class ChatPipeline:
             intent=ctx.current_intent,
             has_symptom=ctx.has_symptom(),
             danger_alert=danger_alert,
-            missing_slots=missing_slots
+            missing_slots=missing_slots,
+            is_first_turn=is_first_turn_triage
         )
 
         self.log.info(
@@ -261,7 +289,13 @@ class ChatPipeline:
         conversation_state_service.save_medical_context(ctx)
 
         # 保存对话记录
-        conversation_service.append_message(conversation_id, user_id, "user", message)
+        conversation_service.append_message(
+            conversation_id,
+            user_id,
+            "user",
+            message,
+            member_id=effective_member_id
+        )
 
         # Bot 回复带元数据
         bot_metadata = {
@@ -278,7 +312,8 @@ class ChatPipeline:
 
         conversation_service.append_message(
             conversation_id, user_id, "assistant", result.message,
-            metadata=bot_metadata
+            metadata=bot_metadata,
+            member_id=effective_member_id
         )
 
         # 安排延迟档案提取
@@ -290,6 +325,8 @@ class ChatPipeline:
                     delay_minutes=30
                 )
             )
+
+        result.metadata["member_id"] = effective_member_id
 
         return result
 
@@ -327,10 +364,10 @@ class ChatPipeline:
             return self._ask_missing_slots(ctx, transition.metadata.get("missing_slots", []))
 
         elif action == Action.MAKE_TRIAGE_DECISION:
-            return await self._make_triage_decision(ctx, profile_context)
+            return await self._make_triage_decision(ctx, profile_context, transition.metadata.get("missing_slots"))
 
         elif action == Action.RUN_RAG_QUERY:
-            return await self._run_rag_query(ctx, message, profile_context)
+            return await self._run_rag_query(ctx, message, profile_context, transition.metadata.get("missing_slots"))
 
         else:
             # 兜底
@@ -449,7 +486,8 @@ class ChatPipeline:
     async def _make_triage_decision(
         self,
         ctx: MedicalContext,
-        profile_context: Dict[str, Any]
+        profile_context: Dict[str, Any],
+        missing_slots: Optional[List[str]] = None
     ) -> PipelineResult:
         """做出分诊决策"""
         symptom = ctx.get_symptom()
@@ -467,6 +505,16 @@ class ChatPipeline:
 
         # 检查是否为首次分诊（基于 ctx.chief_complaint）
         is_first_triage = ctx.chief_complaint is not None and ctx.triage_snapshot is not None
+        
+        # 准备元数据
+        metadata = {
+            "intent": "triage",
+            "triage_level": decision.level,
+            "entities": entities_dict,
+            "is_first_triage": is_first_triage
+        }
+        
+        need_follow_up = False
 
         if is_first_triage:
             # 首次分诊：使用结构化响应 + RAG内容
@@ -476,6 +524,27 @@ class ChatPipeline:
                 query=query,
                 context=profile_context
             )
+            
+            # 如果有缺失槽位，生成追问问题
+            follow_up_question = ""
+            if missing_slots:
+                follow_up_question = triage_engine.generate_follow_up_question(symptom, missing_slots)
+                
+                # 添加到元数据，方便前端处理（如显示选项卡）
+                structured_slots = {}
+                slot_label_map = {
+                    "age_months": "月龄", "temperature": "体温", "duration": "持续时长",
+                    "mental_state": "精神状态", "accompanying_symptoms": "伴随症状",
+                    "frequency": "频率", "symptom": "症状"
+                }
+                for slot in missing_slots:
+                    options = triage_engine.get_slot_options(slot)
+                    label = slot_label_map.get(slot, slot)
+                    structured_slots[slot] = {"label": label, "options": options}
+                
+                metadata["missing_slots"] = structured_slots
+                metadata["need_follow_up"] = True
+                need_follow_up = True
 
             # 构建用户上下文
             user_context = {
@@ -485,12 +554,21 @@ class ChatPipeline:
             }
 
             # 生成结构化响应
-            structured_response = await llm_service.generate_structured_triage_response(
-                rag_content=rag_result.answer,
-                user_context=user_context
-            )
-
-            response_message = f"**{decision.reason}**\n\n{structured_response}\n\n{decision.action}"
+            # 如果有缺失槽位，使用首轮响应模板（包含追问）
+            if missing_slots:
+                structured_response = await llm_service.generate_first_turn_response(
+                    rag_content=rag_result.answer,
+                    user_context=user_context,
+                    follow_up_question=follow_up_question
+                )
+                response_message = structured_response
+            else:
+                # 信息完整，使用标准分诊响应
+                structured_response = await llm_service.generate_structured_triage_response(
+                    rag_content=rag_result.answer,
+                    user_context=user_context
+                )
+                response_message = f"**{decision.reason}**\n\n{structured_response}\n\n{decision.action}"
         else:
             # 非首次分诊：使用原有格式
             response_message = f"**{decision.reason}**\n\n{decision.action}"
@@ -500,12 +578,9 @@ class ChatPipeline:
         return PipelineResult(
             conversation_id=ctx.conversation_id,
             message=response_message,
-            metadata={
-                "intent": "triage",
-                "triage_level": decision.level,
-                "entities": entities_dict,
-                "is_first_triage": is_first_triage
-            }
+            metadata=metadata,
+            need_follow_up=need_follow_up,
+            missing_slots=missing_slots if missing_slots else None
         )
 
     async def _run_rag_query(

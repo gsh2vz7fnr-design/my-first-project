@@ -71,7 +71,7 @@ class LLMService:
 
         return json.loads(content)
 
-    def _try_fast_path_extraction(self, user_input: str) -> Optional[dict]:
+    def _try_fast_path_extraction(self, user_input: str, accumulated_slots: Optional[Dict[str, Any]] = None) -> Optional[dict]:
         """
         快速路径：检测简单的时间/数字输入，避免调用 LLM
 
@@ -80,6 +80,7 @@ class LLMService:
 
         Args:
             user_input: 用户输入
+            accumulated_slots: 已累积的槽位，用于智能判断应该填充哪个槽位
 
         Returns:
             Optional[dict]: 如果是简单输入则返回结果，否则返回 None
@@ -87,6 +88,7 @@ class LLMService:
         import re
 
         text = user_input.strip()
+        accumulated_slots = accumulated_slots or {}
 
         # 简单时长模式：只包含时间单位 + 数字/中文数字
         # 匹配：半天、3天、2小时、5分钟、一周等
@@ -97,13 +99,18 @@ class LLMService:
 
         for pattern in time_patterns:
             if re.match(pattern, text):
-                # 提取时间值
-                duration_value = text
+                time_value = text
+                
+                # 智能判断：如果 duration 已存在，则走 LLM 路径
+                # 避免"反复问持续时间"的问题
+                if "duration" in accumulated_slots and accumulated_slots["duration"]:
+                    return None
+                
                 return {
                     "intent": "slot_filling",
                     "intent_confidence": 0.95,
                     "entities": {
-                        "duration": duration_value
+                        "duration": time_value
                     }
                 }
 
@@ -138,7 +145,7 @@ class LLMService:
             IntentAndEntities: 意图和实体
         """
         # P7 优化: 快速路径 - 检测简单的时间/数字输入，避免调用 LLM
-        fast_result = self._try_fast_path_extraction(user_input)
+        fast_result = self._try_fast_path_extraction(user_input, accumulated_slots)
         if fast_result:
             self.log.debug("快速路径提取: {}", fast_result)
             return self._normalize_intent_entities(fast_result, user_input=user_input)
@@ -1246,6 +1253,78 @@ class LLMService:
             self.log.error("生成结构化健康建议失败: {}", e, exc_info=True)
             self.remote_available = False
             return self._generate_fallback_health_advice(user_context)
+
+    async def generate_first_turn_response(
+        self,
+        rag_content: str,
+        user_context: Optional[Dict[str, Any]] = None,
+        follow_up_question: str = ""
+    ) -> str:
+        """
+        生成首轮分诊响应（包含共情、建议和追问）
+
+        Args:
+            rag_content: RAG检索到的医学内容
+            user_context: 用户上下文
+            follow_up_question: 需要追问的问题
+
+        Returns:
+            str: 响应文本
+        """
+        prompt = f"""基于以下医学内容，生成一个温暖、专业的首轮分诊响应。
+
+医学内容：
+{rag_content}
+
+用户上下文：
+{json.dumps(user_context, ensure_ascii=False) if user_context else "无"}
+
+追问问题：{follow_up_question}
+
+请生成包含以下4部分的响应：
+1. 共情与总结（30-40字）：确认症状，表达理解和关心（如"宝宝发烧38.5度...您一定很着急"）
+2. 初步建议（40-50字）：基于医学内容的背景知识或安抚性建议
+3. 护理指导（40-50字）：即时可行的非诊断性建议（如物理降温、观察要点）
+4. 信息收集（20-30字）：为了更好地帮助用户，礼貌地提出追问问题
+
+要求：
+- 语气温暖、亲切，像朋友一样
+- **必须包含追问问题**（如果提供了）
+- 不要过早下结论，强调是初步建议
+- 总字数控制在200字以内
+- 每部分自然衔接，不要加序号或标题
+
+直接输出响应文本，不要解释。"""
+
+        if not self.remote_available:
+            return self._generate_fallback_first_turn_response(user_context, follow_up_question)
+
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": self._build_system_prompt()},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.7,
+                max_tokens=400
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            self.log.error("生成首轮分诊响应失败: {}", e, exc_info=True)
+            self.remote_available = False
+            return self._generate_fallback_first_turn_response(user_context, follow_up_question)
+
+    def _generate_fallback_first_turn_response(self, context: Optional[Dict[str, Any]], follow_up_question: str) -> str:
+        """本地兜底：生成首轮响应"""
+        symptom = context.get("symptom", "不适") if context else "不适"
+        return f"""听到宝宝{symptom}，您一定很担心。
+
+一般{symptom}可能是由多种原因引起的，建议您先保持冷静。
+
+请注意观察宝宝的精神状态，保持环境舒适。
+
+为了更好地帮您分析，{follow_up_question}"""
 
     def _generate_fallback_triage_response(self, context: Optional[Dict[str, Any]]) -> str:
         """本地兜底：生成简化的分诊响应"""

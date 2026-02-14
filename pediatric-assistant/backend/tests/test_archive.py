@@ -243,3 +243,17 @@ class TestConversationServiceArchived:
 
         # 应该返回False或不抛出异常
         assert success is False
+
+    def test_bind_member_and_get_bound_member(self):
+        """TC-ARCHIVE-013: 会话绑定 member_id 并可读取"""
+        self.service.create_conversation("test_bind_member", "test_user")
+        bound = self.service.bind_member("test_bind_member", "test_user", "member_001")
+        assert bound == "member_001"
+        assert self.service.get_bound_member_id("test_bind_member") == "member_001"
+
+    def test_bind_member_mismatch_rejected(self):
+        """TC-ARCHIVE-014: 已绑定会话不允许切换到其他 member_id"""
+        self.service.create_conversation("test_bind_member_conflict", "test_user", member_id="member_A")
+        with pytest.raises(ValueError) as exc:
+            self.service.bind_member("test_bind_member_conflict", "test_user", "member_B")
+        assert "member_mismatch" in str(exc.value)

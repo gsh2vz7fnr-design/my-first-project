@@ -120,6 +120,93 @@ function createArchiveConfirmModal(options = {}) {
 }
 
 /**
+ * Create member selector modal for consultation context switching.
+ * @param {Object} options
+ * @param {Array} options.members
+ * @param {string|null} options.activeMemberId
+ * @param {Function} options.onConfirm
+ * @param {Function} options.onCancel
+ * @returns {{element: HTMLElement, show: Function, hide: Function}}
+ */
+function createMemberSelectorModal(options = {}) {
+  const { members = [], activeMemberId = null, onConfirm, onCancel } = options;
+
+  const overlay = document.createElement("div");
+  overlay.className = "member-modal-overlay";
+  overlay.setAttribute("role", "dialog");
+  overlay.setAttribute("aria-modal", "true");
+  overlay.setAttribute("aria-labelledby", "member-modal-title");
+
+  const modal = document.createElement("div");
+  modal.className = "member-modal";
+
+  modal.innerHTML = `
+    <div class="member-modal__header">
+      <h2 id="member-modal-title" class="member-modal__title">选择当前就诊人</h2>
+      <button class="member-modal__close" aria-label="关闭">×</button>
+    </div>
+    <div class="member-modal__body">
+      <p class="member-modal__description">
+        切换后将开启新会话，避免不同就诊人的上下文混淆。
+      </p>
+      <div class="member-modal__list" id="member-modal-list">
+        ${members.map((member) => `
+          <label class="member-modal__option">
+            <input type="radio" name="consult-member" value="${member.id}" ${member.id === activeMemberId ? "checked" : ""} />
+            <span class="member-modal__meta">
+              <span class="member-modal__name">${member.name || "未命名成员"}</span>
+              <span class="member-modal__sub">${member.relationship || "成员"}</span>
+            </span>
+          </label>
+        `).join("")}
+      </div>
+    </div>
+    <div class="member-modal__actions">
+      <button class="member-modal__button member-modal__button--cancel" type="button">取消</button>
+      <button class="member-modal__button member-modal__button--confirm" type="button">确认切换</button>
+    </div>
+  `;
+
+  overlay.appendChild(modal);
+
+  const closeBtn = modal.querySelector(".member-modal__close");
+  const cancelBtn = modal.querySelector(".member-modal__button--cancel");
+  const confirmBtn = modal.querySelector(".member-modal__button--confirm");
+
+  const close = () => {
+    overlay.classList.remove("member-modal-overlay--visible");
+    setTimeout(() => overlay.remove(), 200);
+    if (onCancel) onCancel();
+  };
+
+  const confirm = () => {
+    const selected = modal.querySelector('input[name="consult-member"]:checked');
+    const selectedId = selected ? selected.value : (members[0] ? members[0].id : null);
+    overlay.classList.remove("member-modal-overlay--visible");
+    setTimeout(() => overlay.remove(), 200);
+    if (onConfirm) onConfirm(selectedId);
+  };
+
+  closeBtn.addEventListener("click", close);
+  cancelBtn.addEventListener("click", close);
+  confirmBtn.addEventListener("click", confirm);
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) close();
+  });
+
+  return {
+    element: overlay,
+    show() {
+      document.body.appendChild(overlay);
+      overlay.offsetHeight;
+      overlay.classList.add("member-modal-overlay--visible");
+      confirmBtn.focus();
+    },
+    hide: close,
+  };
+}
+
+/**
  * Create a disclaimer modal for first-time users
  * @returns {Object} - Modal element with show/hide methods
  */
@@ -441,30 +528,44 @@ function createComposer() {
   footer.setAttribute("role", "form");
   footer.setAttribute("aria-label", "消息输入框");
 
-  // Input wrapper for layout
   const inputWrapper = document.createElement("div");
   inputWrapper.className = "composer-input-wrapper";
 
   inputWrapper.innerHTML = `
+    <button class="composer-voice-toggle" aria-label="语音输入" type="button">
+      <span aria-hidden="true">🎤</span>
+    </button>
     <input
       class="composer-input"
       type="text"
-      placeholder="请描述症状..."
+      placeholder="发消息或按住说话..."
       aria-label="输入您的消息"
       aria-describedby="composer-hint"
     />
-    <button class="composer-send" aria-label="发送消息" type="submit">
-      发送
+    <button class="composer-send" aria-label="更多功能" type="submit">
+      +
+    </button>
+  `;
+
+  const contextRow = document.createElement("div");
+  contextRow.className = "composer-context-row";
+  contextRow.innerHTML = `
+    <button class="composer-member-pill" type="button" aria-label="切换就诊人">
+      为默认成员咨询 <span aria-hidden="true">⇅</span>
+    </button>
+    <button class="composer-profile-link" type="button" aria-label="查看档案">
+      查看档案 <span aria-hidden="true">›</span>
     </button>
   `;
 
   const hint = document.createElement("div");
   hint.className = "composer-hint";
   hint.id = "composer-hint";
-  hint.textContent = "提示：可直接输入「发烧39度，精神蔫」，系统会引导补全信息。";
+  hint.textContent = "提示：切换就诊人会自动开启新会话，避免上下文混淆。";
   hint.setAttribute("aria-live", "polite");
 
   footer.appendChild(inputWrapper);
+  footer.appendChild(contextRow);
   footer.appendChild(hint);
 
   return {
@@ -472,6 +573,9 @@ function createComposer() {
     refs: {
       input: footer.querySelector(".composer-input"),
       button: footer.querySelector(".composer-send"),
+      voiceToggle: footer.querySelector(".composer-voice-toggle"),
+      memberPill: footer.querySelector(".composer-member-pill"),
+      profileLink: footer.querySelector(".composer-profile-link"),
     },
   };
 }

@@ -158,6 +158,7 @@ class ChatRequest(BaseModel):
     """聊天请求"""
     user_id: str = Field(..., description="用户ID")
     conversation_id: Optional[str] = Field(None, description="对话ID")
+    member_id: Optional[str] = Field(None, description="就诊成员ID")
     message: str = Field(..., description="用户消息")
 
 

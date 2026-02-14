@@ -172,10 +172,35 @@ class ArchiveService:
             "allergy": 0,
             "medication": 0,
             "checkup": 0,
+            "baby_info": 0,
         }
 
         today = datetime.now().strftime("%Y-%m-%d")
         slots = ctx.slots or {}
+
+        # 0. 提取宝宝基本信息到档案
+        from app.services.profile_service import profile_service
+        baby_update = {}
+        if slots.get("age_months"):
+            baby_update["age_months"] = slots["age_months"]
+        if slots.get("weight_kg"):
+            baby_update["weight_kg"] = slots["weight_kg"]
+        if slots.get("gender"):
+            baby_update["gender"] = slots["gender"]
+        
+        if baby_update:
+            try:
+                from app.models.user import BabyInfo
+                profile = profile_service.get_profile(member_id)
+                current_baby = profile.baby_info.model_dump()
+                current_baby.update(baby_update)
+                
+                profile.baby_info = BabyInfo(**current_baby)
+                profile_service.save_profile(profile)
+                result["baby_info"] = 1
+                logger.info(f"已更新宝宝档案: member={member_id}, updates={baby_update}")
+            except Exception as e:
+                logger.warning(f"更新宝宝档案失败: {e}")
 
         # 1. 问诊记录
         try:

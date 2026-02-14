@@ -59,5 +59,19 @@ async def test_stream_chunks_generation():
     assert any('"type": "done"' in c for c in chunks)
 
 
+@pytest.mark.asyncio
+async def test_member_binding_mismatch_raises(pipeline):
+    """会话已绑定成员时，不允许以其他 member_id 继续会话"""
+    with patch("app.services.chat_pipeline.conversation_service.get_bound_member_id", return_value="member_A"):
+        with pytest.raises(ValueError) as exc:
+            await pipeline.process_message(
+                user_id="user_1001",
+                message="宝宝发烧",
+                conversation_id="conv_member_lock",
+                member_id="member_B"
+            )
+    assert "member_mismatch" in str(exc.value)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -3,10 +3,122 @@ const API_BASE = "http://localhost:8000";
 
 // Global user ID - can be updated via soft login
 let CURRENT_USER_ID = "test_user_001";
+const LAST_ACTIVE_MEMBER_KEY = "last_active_member_id";
+let currentMemberId = null;
+let currentMemberName = "默认成员";
+let cachedMembers = [];
+let conversationMemberMap = {};
 
 // Helper function to get current user ID
 function getUserId() {
   return localStorage.getItem('pediatric_user_id') || CURRENT_USER_ID;
+}
+
+function getMemberStorageKey() {
+  return `${LAST_ACTIVE_MEMBER_KEY}:${getUserId() || "anonymous"}`;
+}
+
+function persistActiveMember(memberId) {
+  const key = getMemberStorageKey();
+  if (memberId) {
+    localStorage.setItem(key, memberId);
+  } else {
+    localStorage.removeItem(key);
+  }
+}
+
+function updateComposerMemberUI() {
+  if (!composer?.refs?.memberPill) return;
+  const label = currentMemberName || "默认成员";
+  composer.refs.memberPill.innerHTML = `为${label}咨询 <span aria-hidden="true">⇅</span>`;
+}
+
+function syncMemberUIEverywhere() {
+  updateComposerMemberUI();
+  if (currentTab === "health" && cachedMembers.length > 0 && typeof renderHealthMemberSwitcher === "function") {
+    renderHealthMemberSwitcher(cachedMembers, currentMemberId);
+  }
+}
+
+async function loadMembersForCurrentUser() {
+  const userId = getUserId();
+  if (!userId) return [];
+  try {
+    const response = await fetch(`${API_BASE}/api/v1/profile/${userId}/members`);
+    if (!response.ok) return [];
+    const data = await response.json();
+    return data.data?.members || [];
+  } catch (error) {
+    console.warn("[MEMBER] Failed to load members:", error);
+    return [];
+  }
+}
+
+async function syncActiveMember() {
+  cachedMembers = await loadMembersForCurrentUser();
+  const restored = localStorage.getItem(getMemberStorageKey());
+  const found = restored ? cachedMembers.find((m) => m.id === restored) : null;
+
+  if (found) {
+    currentMemberId = found.id;
+    currentMemberName = found.name || "默认成员";
+  } else if (cachedMembers.length > 0) {
+    currentMemberId = cachedMembers[0].id;
+    currentMemberName = cachedMembers[0].name || "默认成员";
+  } else {
+    currentMemberId = null;
+    currentMemberName = "默认成员";
+  }
+
+  persistActiveMember(currentMemberId);
+  syncMemberUIEverywhere();
+}
+
+function resetChatToWelcome() {
+  conversationId = null;
+  chat.innerHTML = "";
+  const welcome = createWelcomeScreen();
+  chat.appendChild(welcome);
+}
+
+async function switchActiveMember(memberId, memberName) {
+  if (!memberId || memberId === currentMemberId) return;
+  if (conversationId) {
+    const ok = confirm("切换就诊人将开启新会话并清空当前上下文，是否继续？");
+    if (!ok) return;
+  }
+  currentMemberId = memberId;
+  currentMemberName = memberName || "默认成员";
+  persistActiveMember(currentMemberId);
+  syncMemberUIEverywhere();
+
+  // 关键隔离：切换成员后强制开启新会话上下文
+  resetChatToWelcome();
+  conversationSidebar.setActive("");
+  showBanner(`已切换就诊人：${currentMemberName}，已开启新会话`, "info");
+  await loadConversations();
+}
+
+async function showConsultMemberSelector() {
+  cachedMembers = await loadMembersForCurrentUser();
+  if (cachedMembers.length === 0) {
+    showBanner("请先创建就诊人后再问诊。", "warn");
+    const shouldCreate = confirm("当前还没有就诊人档案，是否现在创建？");
+    if (shouldCreate) {
+      showCreateMemberForm();
+    }
+    return;
+  }
+  const modal = createMemberSelectorModal({
+    members: cachedMembers,
+    activeMemberId: currentMemberId,
+    onConfirm: async (selectedMemberId) => {
+      const selected = cachedMembers.find((m) => m.id === selectedMemberId);
+      await switchActiveMember(selectedMemberId, selected?.name);
+    },
+    onCancel: () => {}
+  });
+  modal.show();
 }
 
 let conversationId = null;
@@ -157,6 +269,7 @@ const header = createHeader();
 const tabs = createTabs(handleTabChange);
 const chat = createChat();
 const composer = createComposer();
+updateComposerMemberUI();
 
 // Add progress container to composer
 const progressContainer = document.createElement("div");
@@ -220,6 +333,15 @@ chatResizeObserver = setupResizeObserver();
 // Listen for tab change events from header
 header.addEventListener("tabchange", (e) => {
   handleTabChange(e.detail);
+});
+
+composer.refs.memberPill?.addEventListener("click", () => {
+  showConsultMemberSelector();
+});
+
+composer.refs.profileLink?.addEventListener("click", async () => {
+  const healthTab = header.querySelector('[data-tab="health"]');
+  if (healthTab) healthTab.click();
 });
 
 // Add sidebar toggle button to header
@@ -563,10 +685,16 @@ async function loadConversations() {
   }
 
   try {
+    await syncActiveMember();
+
     const response = await fetch(`${API_BASE}/api/v1/chat/conversations/${userId}`);
     if (!response.ok) throw new Error("请求失败");
     const data = await response.json();
     const conversations = data.data.conversations || [];
+    conversationMemberMap = {};
+    conversations.forEach((c) => {
+      conversationMemberMap[c.conversation_id] = c.member_id || null;
+    });
     conversationSidebar.renderConversations(conversations);
 
     // 页面刷新后，自动加载最近对话（恢复上下文）
@@ -575,6 +703,14 @@ async function loadConversations() {
       const latestId = conversationSidebar.getLatestConversationId();
       if (latestId) {
         console.log(`[REFRESH] Auto-loading latest conversation: ${latestId}`);
+        const latestMemberId = conversationMemberMap[latestId];
+        if (latestMemberId && latestMemberId !== currentMemberId) {
+          const member = cachedMembers.find((m) => m.id === latestMemberId);
+          currentMemberId = latestMemberId;
+          currentMemberName = member?.name || "默认成员";
+          persistActiveMember(currentMemberId);
+          syncMemberUIEverywhere();
+        }
         conversationId = latestId;
         conversationSidebar.setActive(latestId);
         await loadHistory();
@@ -620,6 +756,14 @@ async function handleNewConversation() {
 }
 
 async function handleSwitchConversation(convId) {
+  const boundMemberId = conversationMemberMap[convId];
+  if (boundMemberId && boundMemberId !== currentMemberId) {
+    const member = cachedMembers.find((m) => m.id === boundMemberId);
+    currentMemberId = boundMemberId;
+    currentMemberName = member?.name || "默认成员";
+    persistActiveMember(currentMemberId);
+    syncMemberUIEverywhere();
+  }
   conversationId = convId;
 
   // Load messages
@@ -972,6 +1116,11 @@ function renderQuickReplies(metadata) {
  * @param {number} retryCount - Current retry attempt
  */
 async function sendMessageStream(text, retryCount = 0) {
+  if (!currentMemberId) {
+    showBanner("请先选择或创建就诊人后再问诊。", "warn");
+    await showConsultMemberSelector();
+    return;
+  }
   const MAX_RETRIES = 3;
   const startTime = performance.now();
   let firstTokenTime = null;
@@ -993,6 +1142,7 @@ async function sendMessageStream(text, retryCount = 0) {
   console.log(`[SEND] Full payload:`, {
     conversation_id: conversationId,
     user_id: CURRENT_USER_ID,
+    member_id: currentMemberId,
     message: text
   });
 
@@ -1024,12 +1174,28 @@ async function sendMessageStream(text, retryCount = 0) {
       body: JSON.stringify({
         user_id: CURRENT_USER_ID,
         conversation_id: conversationId,
+        member_id: currentMemberId,
         message: text,
       }),
     });
 
     if (!response.ok) {
       thinkingBubble.remove();
+      const errorPayload = await response.json().catch(() => ({}));
+      const detail = errorPayload.detail || {};
+      if (detail.code === "need_member_creation") {
+        showBanner("请先在健康档案创建就诊人后再开始问诊。", "warn");
+        return;
+      }
+      if (detail.code === "need_member_selection") {
+        showBanner("请先选择就诊人。", "warn");
+        await showConsultMemberSelector();
+        return;
+      }
+      if (detail.code === "member_mismatch") {
+        showBanner("当前会话已绑定其他就诊人，请切换后新建会话。", "warn");
+        return;
+      }
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
 
@@ -1064,6 +1230,13 @@ async function sendMessageStream(text, retryCount = 0) {
             // Handle metadata chunks
             if (data.type === "metadata" && data.metadata) {
               metadata = data.metadata;
+
+              if (metadata.error === "member_mismatch") {
+                showBanner("当前会话已绑定其他就诊人，请先切换后开启新会话。", "warn");
+              }
+              if (metadata.error === "bad_request" && metadata.message) {
+                showBanner(metadata.message, "warn");
+              }
 
               // Handle danger signals - show modal
               if (metadata.danger_signal) {
@@ -1276,13 +1449,32 @@ header.addEventListener("archive-conversation", async () => {
     return;
   }
 
-  // 首先尝试不带 member_id 归档（适用于单成员或无成员场景）
+  // 优先使用当前就诊人，避免归档落到错误成员
+  if (currentMemberId) {
+    try {
+      await performArchive(conversationId, currentMemberId);
+    } catch (error) {
+      if (error.code === "member_mismatch") {
+        showBanner("当前会话已绑定其他就诊人，请切换后新建会话。", "warn");
+      } else if (error.code === "need_member_creation") {
+        showBanner("请先创建就诊人档案后再归档。", "warn");
+      } else if (error.code === "need_member_selection") {
+        await showMemberSelector(conversationId);
+      } else {
+        showBanner("归档失败，请重试。", "warn");
+      }
+    }
+    return;
+  }
+
+  // 无当前成员时，保留旧兼容流程
   try {
     await performArchive(conversationId, null);
   } catch (error) {
-    // 如果返回 400，说明需要选择成员
-    if (error.status === 400) {
+    if (error.code === "need_member_selection" || error.status === 400) {
       await showMemberSelector(conversationId);
+    } else if (error.code === "need_member_creation") {
+      showBanner("请先创建就诊人档案后再归档。", "warn");
     } else {
       console.error('[ARCHIVE] Failed to archive:', error);
       showBanner("归档失败，请重试", "info");
@@ -1372,8 +1564,12 @@ async function performArchive(convId, memberId) {
 
     if (!archiveResponse.ok) {
       const errorData = await archiveResponse.json().catch(() => ({}));
-      const error = new Error(errorData.detail || '归档失败');
+      const detail = errorData.detail || {};
+      const error = new Error(
+        typeof detail === "string" ? detail : (detail.message || '归档失败')
+      );
       error.status = archiveResponse.status;
+      error.code = detail.code;
       throw error;
     }
 
@@ -1417,6 +1613,11 @@ loadConversations();
 async function sendMessage() {
   const text = composer.refs.input.value.trim();
   if (!text) return;
+  if (!currentMemberId) {
+    showBanner("请先选择或创建就诊人后再问诊。", "warn");
+    await showConsultMemberSelector();
+    return;
+  }
 
   hideBanner();
   appendMessage("user", text);
@@ -1435,11 +1636,17 @@ async function sendMessage() {
   }
 }
 
-composer.refs.button.addEventListener("click", sendMessage);
+composer.refs.button.addEventListener("click", () => {
+  showBanner("更多功能入口开发中，可直接按 Enter 发送消息。", "info");
+});
 composer.refs.input.addEventListener("keydown", (event) => {
   if (event.key === "Enter") {
     sendMessage();
   }
+});
+
+composer.refs.voiceToggle?.addEventListener("click", () => {
+  showBanner("语音输入功能开发中，暂可使用文字输入。", "info");
 });
 
 // ============ 健康档案数据加载 ============
@@ -1684,6 +1891,40 @@ function showEmptyMemberState() {
   }
 }
 
+function renderHealthMemberSwitcher(members, activeMemberId) {
+  const dashboard = healthDashboard.element;
+  const existing = dashboard.querySelector(".health-member-switcher");
+  if (existing) existing.remove();
+  if (!members || members.length === 0) return;
+
+  const wrap = document.createElement("div");
+  wrap.className = "health-member-switcher";
+  const active = members.find((m) => m.id === activeMemberId) || members[0];
+  wrap.innerHTML = `
+    <span class="health-member-switcher__label">当前就诊人</span>
+    <button class="health-member-switcher__button" type="button">
+      ${active?.name || "默认成员"} <span aria-hidden="true">⇅</span>
+    </button>
+  `;
+
+  const button = wrap.querySelector(".health-member-switcher__button");
+  button.addEventListener("click", () => {
+    const modal = createMemberSelectorModal({
+      members,
+      activeMemberId,
+      onConfirm: async (selectedMemberId) => {
+        const member = members.find((m) => m.id === selectedMemberId);
+        await switchActiveMember(selectedMemberId, member?.name);
+        await loadHealthData();
+      },
+      onCancel: () => {}
+    });
+    modal.show();
+  });
+
+  dashboard.prepend(wrap);
+}
+
 async function loadHealthData() {
   const userId = CURRENT_USER_ID;
 
@@ -1705,12 +1946,19 @@ async function loadHealthData() {
     const membersData = await membersResponse.json();
 
     if (membersData.data && membersData.data.members && membersData.data.members.length > 0) {
-      // 获取第一个成员的详细数据
-      const firstMember = membersData.data.members[0];
+      const members = membersData.data.members;
+      const selectedMember =
+        members.find((m) => m.id === currentMemberId) ||
+        members[0];
+      currentMemberId = selectedMember.id;
+      currentMemberName = selectedMember.name || "默认成员";
+      persistActiveMember(currentMemberId);
+      syncMemberUIEverywhere();
 
       // 重建健康仪表板内容
       rebuildHealthDashboard();
-      await loadMemberDetail(firstMember.id);
+      renderHealthMemberSwitcher(members, selectedMember.id);
+      await loadMemberDetail(selectedMember.id);
     } else {
       // 没有成员，显示空状态
       showEmptyMemberState();
@@ -2010,6 +2258,14 @@ function showCreateMemberForm() {
         if (memberResponse.ok) {
           const memberResult = await memberResponse.json();
           const memberId = memberResult.data.member_id;
+          const memberName = memberResult.data.name || data.name || "默认成员";
+
+          // 创建后自动切到新成员，避免后续问诊写到旧上下文
+          currentMemberId = memberId;
+          currentMemberName = memberName;
+          persistActiveMember(currentMemberId);
+          syncMemberUIEverywhere();
+          showBanner(`已创建并切换到就诊人：${memberName}`, "success");
 
           // 重新加载数据（后端 create_member 已处理体征和习惯）
           form.element.remove();

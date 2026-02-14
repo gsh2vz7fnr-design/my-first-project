@@ -1,7 +1,7 @@
 # 智能儿科分诊与护理助手 — 需求文档 (PRD)
 
-> **版本**: v4.0 (基于代码审计同步)
-> **更新日期**: 2026-02-10
+> **版本**: v4.1 (基于代码审计同步)
+> **更新日期**: 2026-02-14
 > **文档性质**: Source of Truth — 与代码实现完全对齐
 
 ---
@@ -385,6 +385,12 @@ graph TD
 3. 注入到 RAG 生成的 context 中
 4. 用于槽位自动填充（age_months, weight_kg）
 
+新增约束（多就诊人成员场景）：
+- 会话在首条消息阶段绑定 `member_id`，绑定后为该会话不可变属性
+- 后续消息若携带不同 `member_id`，后端返回 `member_mismatch`，前端必须提示“新建会话后再切换就诊人”
+- `age_months` 不允许直接持久化用户口述值作为长期档案事实；档案展示与推理均以 `birth_date + 当前日期` 动态换算
+- 归档操作必须读取会话已绑定 `member_id`，不以“点击归档瞬间前端当前选中成员”作为唯一真值
+
 #### 3.4.4 家庭成员管理
 
 完整的 CRUD 系统：
@@ -415,6 +421,15 @@ graph TD
 - **自动标题**：取首条用户消息前 30 字作为对话标题
 - **历史记录**：SQLite 存储，支持按 conversation_id 查询（默认限 50 条）
 - **线程安全**：所有 SQLite 操作通过 threading.Lock 保护
+
+#### 3.5.1 会话上下文隔离（医疗安全关键约束）
+
+- 成员切换必须触发“新会话”或“清空当前会话历史”二选一，不允许在同一会话继续追问
+- 前端保存 `last_active_member_id:<user_id>`，刷新后优先恢复，避免误切回默认成员
+- 后端会话数据记录 `member_id`，用于历史查询、归档入库、风险审计
+- 会话归档前执行双检验：
+  - 主检验：读取会话已绑定 `member_id`
+  - 次检验：若前端请求同时携带 `member_id` 且不一致，则返回错误并拒绝归档
 
 ---
 
@@ -468,6 +483,7 @@ graph TD
 |------|------|------|
 | POST | `/send` | 发送消息（非流式） |
 | POST | `/stream` | 发送消息（SSE 流式） |
+| POST | `/archive` | 归档当前对话到健康档案（按会话绑定成员落库） |
 | GET | `/history/{conversation_id}` | 获取对话历史 |
 | GET | `/source/{entry_id}` | 获取知识库原文片段 |
 | GET | `/conversations/{user_id}` | 获取用户所有对话 |
@@ -523,6 +539,7 @@ graph TD
 | `createFollowUpForm` | 动态表单（text/number/select/multiselect） |
 | `createHealthDashboard` | 健康档案仪表盘 |
 | `createMemberProfileForm` | 成员信息编辑表单 |
+| `createMemberSelectorModal` | 就诊人切换弹窗（聊天与档案页复用） |
 
 ### 5.3 Markdown 渲染
 
@@ -540,6 +557,5 @@ graph TD
 | ChromaDB 向量数据库 | 已配置 | **未启用** | 目录存在但未在主流程中使用 |
 | Redis 缓存 | 已配置 | **未启用** | 配置存在但无实际调用 |
 | 限流中间件 | 已配置 | **未实现** | 参数已定义但无中间件代码 |
-
 
 

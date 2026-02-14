@@ -63,7 +63,8 @@ class DialogueStateMachine:
         intent: Optional[IntentType],
         has_symptom: bool,
         danger_alert: Optional[str] = None,
-        missing_slots: Optional[List[str]] = None
+        missing_slots: Optional[List[str]] = None,
+        is_first_turn: bool = False
     ) -> TransitionResult:
         """
         根据当前条件计算状态转移
@@ -73,6 +74,7 @@ class DialogueStateMachine:
             has_symptom: 是否已有症状信息
             danger_alert: 危险信号（如果有）
             missing_slots: 缺失的槽位列表
+            is_first_turn: 是否为首轮对话（用于决定是否优先进行分诊回应）
 
         Returns:
             TransitionResult: 状态转移结果
@@ -100,24 +102,27 @@ class DialogueStateMachine:
             )
 
         # 规则4: 有缺失槽位 → 追问
-        if missing_slots:
+        # 修改：如果是首轮对话，即使有缺失槽位，也允许进入分诊/咨询流程，以便给出共情和初步建议
+        if missing_slots and not is_first_turn:
             return TransitionResult(
                 new_state=DialogueState.COLLECTING_SLOTS,
                 action=Action.ASK_MISSING_SLOTS,
                 metadata={"missing_slots": missing_slots}
             )
 
-        # 规则5: 分诊相关意图且信息完整 → 做出分诊决策
+        # 规则5: 分诊相关意图且信息完整（或首轮对话）→ 做出分诊决策
         if intent in (IntentType.TRIAGE, IntentType.SLOT_FILLING):
             return TransitionResult(
                 new_state=DialogueState.READY_FOR_TRIAGE,
-                action=Action.MAKE_TRIAGE_DECISION
+                action=Action.MAKE_TRIAGE_DECISION,
+                metadata={"missing_slots": missing_slots} if missing_slots else {}
             )
 
         # 规则6: 其他意图（咨询、用药、护理）→ RAG 查询
         return TransitionResult(
             new_state=DialogueState.RAG_QUERY,
-            action=Action.RUN_RAG_QUERY
+            action=Action.RUN_RAG_QUERY,
+            metadata={"missing_slots": missing_slots} if missing_slots else {}
         )
 
     def get_state_description(self, state: DialogueState) -> str:

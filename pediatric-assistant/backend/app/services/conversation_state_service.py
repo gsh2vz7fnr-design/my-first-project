@@ -96,11 +96,16 @@ class ConversationStateService:
                     CREATE TABLE IF NOT EXISTS medical_contexts (
                         conversation_id TEXT PRIMARY KEY,
                         user_id TEXT NOT NULL,
+                        member_id TEXT,
                         context_json TEXT NOT NULL,
                         created_at TEXT,
                         updated_at TEXT
                     )
                 """)
+                try:
+                    cursor.execute("ALTER TABLE medical_contexts ADD COLUMN member_id TEXT")
+                except sqlite3.OperationalError:
+                    pass
 
                 # 创建索引
                 cursor.execute("""
@@ -116,6 +121,14 @@ class ConversationStateService:
 
             except Exception as e:
                 logger.error(f"[ConversationState] 数据库初始化失败: {e}", exc_info=True)
+
+    def _ensure_member_column(self, conn: sqlite3.Connection) -> None:
+        """兼容旧库: 确保 medical_contexts.member_id 列存在"""
+        try:
+            conn.execute("ALTER TABLE medical_contexts ADD COLUMN member_id TEXT")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
 
     # ============ 旧版接口（向后兼容） ============
 
@@ -216,7 +229,8 @@ class ConversationStateService:
     def load_medical_context(
         self,
         conversation_id: str,
-        user_id: str
+        user_id: str,
+        member_id: Optional[str] = None
     ) -> Optional[MedicalContext]:
         """
         加载或创建 MedicalContext
@@ -237,12 +251,17 @@ class ConversationStateService:
             # 1. 检查缓存
             cached = self._context_cache.get(conversation_id)
             if cached:
+                if member_id and cached.member_id and cached.member_id != member_id:
+                    raise ValueError(f"member_mismatch:{cached.member_id}")
+                if member_id and not cached.member_id:
+                    cached.member_id = member_id
                 return cached
 
             # 2. 尝试从数据库加载
             if self._db_initialized:
                 try:
                     conn = sqlite3.connect(self._db_path)
+                    self._ensure_member_column(conn)
                     cursor = conn.cursor()
                     cursor.execute(
                         "SELECT context_json FROM medical_contexts WHERE conversation_id = ?",
@@ -253,17 +272,24 @@ class ConversationStateService:
 
                     if row:
                         ctx = MedicalContext.from_db_json(row[0])
+                        if member_id and ctx.member_id and ctx.member_id != member_id:
+                            raise ValueError(f"member_mismatch:{ctx.member_id}")
+                        if member_id and not ctx.member_id:
+                            ctx.member_id = member_id
                         self._context_cache.put(conversation_id, ctx)
                         logger.info(f"[ConversationState] 从数据库恢复对话 {conversation_id}")
                         return ctx
 
+                except ValueError:
+                    raise
                 except Exception as e:
                     logger.error(f"[ConversationState] 加载上下文失败: {e}")
 
             # 3. 创建新的
             ctx = MedicalContext(
                 conversation_id=conversation_id,
-                user_id=user_id
+                user_id=user_id,
+                member_id=member_id
             )
             self._context_cache.put(conversation_id, ctx)
             return ctx
@@ -289,6 +315,7 @@ class ConversationStateService:
 
             try:
                 conn = sqlite3.connect(self._db_path)
+                self._ensure_member_column(conn)
                 cursor = conn.cursor()
 
                 context_json = ctx.to_db_json()
@@ -297,11 +324,12 @@ class ConversationStateService:
 
                 cursor.execute("""
                     INSERT OR REPLACE INTO medical_contexts
-                    (conversation_id, user_id, context_json, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?)
+                    (conversation_id, user_id, member_id, context_json, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
                 """, (
                     ctx.conversation_id,
                     ctx.user_id,
+                    ctx.member_id,
                     context_json,
                     created_at_str,
                     updated_at_str

@@ -56,6 +56,7 @@ class MedicalContext(BaseModel):
     """
     conversation_id: str = Field(..., description="对话ID")
     user_id: str = Field(..., description="用户ID")
+    member_id: Optional[str] = Field(default=None, description="就诊成员ID（会话绑定后不可变）")
     dialogue_state: DialogueState = Field(
         default=DialogueState.INITIAL,
         description="对话状态"

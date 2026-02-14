@@ -19,11 +19,50 @@ from app.services.rag_service import get_rag_service
 from app.services.conversation_service import conversation_service
 from app.services.conversation_state_service import conversation_state_service
 from app.services.archive_service import archive_service
+from app.services.profile_service import member_profile_service
 from app.config import settings
 
 router = APIRouter()
 
 # ============ 主要端点 ============
+
+def _resolve_member_for_chat(
+    user_id: str,
+    conversation_id: Optional[str],
+    requested_member_id: Optional[str]
+) -> Optional[str]:
+    """
+    解析聊天请求的 member_id（会话隔离）
+    规则：
+    1) 会话已绑定 -> 必须使用绑定值
+    2) 请求显式给出 member_id -> 使用它
+    3) 仅 user_id:
+       - 1个成员: 自动选择
+       - 0个成员: need_member_creation
+       - 多个成员: need_member_selection
+    """
+    if conversation_id:
+        bound_member_id = conversation_service.get_bound_member_id(conversation_id)
+        if bound_member_id:
+            if requested_member_id and requested_member_id != bound_member_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "code": "member_mismatch",
+                        "message": "会话已绑定其他就诊人，请开启新会话后再切换。",
+                        "bound_member_id": bound_member_id,
+                    }
+                )
+            return bound_member_id
+
+    if requested_member_id:
+        return requested_member_id
+
+    members = member_profile_service.get_members(user_id)
+    if len(members) == 1:
+        return members[0]["id"]
+    # 聊天接口保持向后兼容：无成员/多成员时允许不绑定 member_id
+    return None
 
 
 @router.post("/send")
@@ -39,17 +78,38 @@ async def send_message(request: ChatRequest):
     """
     try:
         if settings.USE_NEW_PIPELINE:
+            resolved_member_id = _resolve_member_for_chat(
+                user_id=request.user_id,
+                conversation_id=request.conversation_id,
+                requested_member_id=request.member_id,
+            )
             pipeline = get_chat_pipeline()
             result = await pipeline.process_message(
                 user_id=request.user_id,
                 message=request.message,
-                conversation_id=request.conversation_id
+                conversation_id=request.conversation_id,
+                member_id=resolved_member_id
             )
             return result.to_api_response()
         else:
             return await _send_message_legacy(request)
+    except ValueError as e:
+        detail = str(e)
+        if detail.startswith("member_mismatch:"):
+            bound_member_id = detail.split(":", 1)[1]
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "member_mismatch",
+                    "message": "会话已绑定其他就诊人，请开启新会话后再切换。",
+                    "bound_member_id": bound_member_id,
+                }
+            )
+        raise HTTPException(status_code=400, detail=detail)
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"处理消息失败: {e}", exc_info=True)
+        logger.error("处理消息失败: {}", e, exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -68,11 +128,17 @@ async def send_message_stream(request: ChatRequest):
         """生成流式响应"""
         try:
             if settings.USE_NEW_PIPELINE:
+                resolved_member_id = _resolve_member_for_chat(
+                    user_id=request.user_id,
+                    conversation_id=request.conversation_id,
+                    requested_member_id=request.member_id,
+                )
                 pipeline = get_chat_pipeline()
                 result = await pipeline.process_message(
                     user_id=request.user_id,
                     message=request.message,
-                    conversation_id=request.conversation_id
+                    conversation_id=request.conversation_id,
+                    member_id=resolved_member_id
                 )
 
                 # 使用 Pipeline 的流式输出
@@ -86,6 +152,24 @@ async def send_message_stream(request: ChatRequest):
                 async for chunk in _process_message_legacy_stream(request):
                     yield chunk
 
+        except ValueError as e:
+            detail = str(e)
+            if detail.startswith("member_mismatch:"):
+                err = StreamChunk(
+                    type="metadata",
+                    metadata={
+                        "error": "member_mismatch",
+                        "message": "会话已绑定其他就诊人，请开启新会话后再切换。",
+                        "bound_member_id": detail.split(":", 1)[1],
+                    }
+                )
+                yield f"data: {err.model_dump_json()}\n\n"
+                yield "data: {\"type\": \"done\"}\n\n"
+                return
+            err = StreamChunk(type="metadata", metadata={"error": "bad_request", "message": detail})
+            yield f"data: {err.model_dump_json()}\n\n"
+            yield "data: {\"type\": \"done\"}\n\n"
+            return
         except Exception as e:
             logger.error(f"流式生成失败: {e}", exc_info=True)
             error_chunk = StreamChunk(
@@ -278,9 +362,49 @@ async def archive_conversation(conversation_id: str, request: ArchiveRequest):
     """
     try:
         logger.info(f"Archive request for {conversation_id}: {request.model_dump()}")
-        target_id = request.member_id or request.user_id
-        if not target_id:
-            raise HTTPException(status_code=400, detail="必须提供 user_id 或 member_id")
+        # 会话已绑定 member_id 时，以后端绑定值为准
+        bound_member_id = conversation_service.get_bound_member_id(conversation_id)
+        if bound_member_id:
+            if request.member_id and request.member_id != bound_member_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "code": "member_mismatch",
+                        "message": "会话已绑定其他就诊人，请开启新会话后再切换。",
+                        "bound_member_id": bound_member_id,
+                    }
+                )
+            target_id = bound_member_id
+        else:
+            # 兼容旧请求：仅有 user_id 时按成员数量解析
+            if request.member_id:
+                target_id = request.member_id
+            elif request.user_id:
+                members = member_profile_service.get_members(request.user_id)
+                if len(members) == 1:
+                    target_id = members[0]["id"]
+                elif len(members) == 0:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "code": "need_member_creation",
+                            "message": "请先创建就诊人档案后再归档。",
+                        }
+                    )
+                else:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "code": "need_member_selection",
+                            "message": "存在多个就诊人，请先选择成员再归档。",
+                        }
+                    )
+            else:
+                raise HTTPException(status_code=400, detail="必须提供 user_id 或 member_id")
+
+            # 若本会话尚未绑定，归档时补绑定
+            if request.user_id:
+                conversation_service.bind_member(conversation_id, request.user_id, target_id)
 
         # 归档对话（包含健康数据提取）
         result = await archive_service.archive_conversation(conversation_id, target_id)
