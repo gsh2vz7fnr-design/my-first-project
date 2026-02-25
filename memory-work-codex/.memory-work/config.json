@@ -1,0 +1,11 @@
+{
+  "language_preference": "zh-CN",
+  "timezone": "Asia/Shanghai",
+  "deep_sync_day_start": 4,
+  "memory_decay_weeks": 4,
+  "graduation_threshold": 3,
+  "focus_zone_path": "00 专注区",
+  "week_file": "_本周.md",
+  "memory_log_file": "MEMORY_LOG.md",
+  "iteration_log_file": "ITERATION_LOG.md"
+}

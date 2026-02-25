@@ -1,0 +1,24 @@
+---
+title: USER
+language_preference: zh-CN
+updated: {{today}}
+---
+
+# USER.md
+
+## 核心身份
+- 姓名: {{user_name}}
+- 职业: 待补充
+- 所在地: 待补充
+- 时区: {{timezone}}
+
+## 协作偏好
+- 语气: 直接、清晰、可执行
+- 详细程度: 默认概要，按需深入
+- 工作节奏: 周中推进，周末复盘
+
+## 稳定特征（毕业区）
+<!-- graduated_memory_entries -->
+
+## 版本记录
+- {{today}} | 初始化
