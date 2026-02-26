@@ -13,6 +13,29 @@ MEMORY_PATH = ROOT / 'MEMORY.md'
 CAND_PATH = ROOT / '.memory-work' / 'candidates.jsonl'
 
 
+def normalize_hint(text: str) -> str:
+    return re.sub(r'\s+', '', text).strip().lower()
+
+
+def is_same_hint(a: str, b: str) -> bool:
+    na = normalize_hint(a)
+    nb = normalize_hint(b)
+    if not na or not nb:
+        return False
+    return na == nb or na in nb or nb in na
+
+
+def is_high_quality_hint(text: str) -> bool:
+    if not text:
+        return False
+    bad_tokens = ('示例', '格式', '说明', '待添加', 'AI 会', '初始化')
+    if any(t in text for t in bad_tokens):
+        return False
+    if len(text.strip()) < 8:
+        return False
+    return any(k in text for k in ('习惯', '偏好', '每次', '总是', '倾向'))
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
     p.add_argument('--from-log', action='store_true')
@@ -32,17 +55,26 @@ def load_candidates(from_log: bool) -> list[dict]:
     week = read_text(ROOT / '00 专注区' / '_本周.md')
     heuristic = re.findall(r'(.{0,10}(?:习惯|偏好|每次|总是|倾向).{0,30})', week)
     for idx, h in enumerate(heuristic, 1):
+        hint = h.strip()
+        if not is_high_quality_hint(hint):
+            continue
         out.append(
             {
                 'id': f'heuristic-{iso_today()}-{idx}',
                 'source': 'weekly-heuristic',
                 'date': iso_today(),
-                'hint': h.strip(),
+                'hint': hint,
                 'type': 'dynamic',
             }
         )
     uniq = {}
+    seen_hints: list[str] = []
     for c in out:
+        hint_key = c.get('hint', '')
+        if any(is_same_hint(hint_key, seen) for seen in seen_hints):
+            continue
+        if hint_key:
+            seen_hints.append(hint_key)
         uniq[c['id']] = c
     return list(uniq.values())
 
@@ -72,6 +104,7 @@ def write_entries(approved: list[dict]) -> int:
     if '## 程序记忆条目' not in text:
         text += '\n## 程序记忆条目\n'
 
+    inserted = 0
     for item in approved:
         marker = f"[{item['id']}]"
         if marker in text:
@@ -81,9 +114,10 @@ def write_entries(approved: list[dict]) -> int:
             text = text.replace('## 程序记忆条目', '## 程序记忆条目' + block, 1)
         else:
             text = text.replace('## 动态记忆条目', '## 动态记忆条目' + block, 1)
+        inserted += 1
 
     write_text(MEMORY_PATH, text)
-    return len(approved)
+    return inserted
 
 
 def main() -> int:
@@ -109,7 +143,7 @@ def main() -> int:
             log_event(cfg, 'memory-review', f'新增记忆 {count} 条')
 
     print(f'候选数: {len(candidates)}')
-    print(f'写入数: {len(approved)}')
+    print(f'写入数: {count}')
     return 0
 
 

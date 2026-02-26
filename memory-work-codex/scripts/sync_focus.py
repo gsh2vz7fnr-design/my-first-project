@@ -32,6 +32,9 @@ def mentioned_names(week_text: str) -> set[str]:
     names = set(re.findall(r'`([^`]+)`', week_text))
     for m in re.findall(r'\|\s*([^|]+?)\s*\|\s*(?:草稿|进行中|完成|已归档)', week_text):
         names.add(m.strip())
+    for row in re.findall(r'^\|\s*([^|]+?)\s*\|\s*(草稿|进行中|完成|已归档)\s*\|\s*([^|]+?)\s*\|', week_text, flags=re.M):
+        names.add(row[0].strip())
+        names.add(row[2].strip())
     return names
 
 
@@ -39,6 +42,9 @@ def add_sync_section(text: str, heading: str, lines: list[str]) -> str:
     block = f"\n### {heading}\n" + "\n".join(f"- {ln}" for ln in lines) + "\n"
     if '## 自动同步记录' not in text:
         text += '\n## 自动同步记录\n'
+    pattern = re.compile(rf'\n### {re.escape(heading)}\n(?:- .*\n)*', flags=re.M)
+    if pattern.search(text):
+        return pattern.sub(block, text, count=1)
     return text + block
 
 
@@ -53,20 +59,27 @@ def ensure_today_progress(text: str, date_s: str) -> str:
 
 
 def append_outputs_table(text: str, rel_paths: list[str]) -> str:
+    sec_title = '## 本周文档'
+    if sec_title not in text:
+        text += '\n## 本周文档\n| 文档 | 状态 | 位置 | 备注 |\n|---|---|---|---|\n'
+
+    sec_start = text.index(sec_title)
+    next_sec = text.find('\n## ', sec_start + len(sec_title))
+    if next_sec == -1:
+        next_sec = len(text)
+    section = text[sec_start:next_sec]
+
     for rp in rel_paths:
         name = Path(rp).name
         row = f"| {name} | 进行中 | {rp} | 自动发现 |"
-        if row in text:
+        if row in section:
             continue
-        table_hdr = '| 文档 | 状态 | 位置 | 备注 |'
         table_sep = '|---|---|---|---|'
-        if table_sep in text:
-            text = text.replace(table_sep, table_sep + '\n' + row, 1)
-        elif table_hdr in text:
-            text = text.replace(table_hdr, table_hdr + '\n' + table_sep + '\n' + row, 1)
+        if table_sep in section:
+            section = section.replace(table_sep, table_sep + '\n' + row, 1)
         else:
-            text += '\n## 本周文档\n| 文档 | 状态 | 位置 | 备注 |\n|---|---|---|---|\n' + row + '\n'
-    return text
+            section += '\n| 文档 | 状态 | 位置 | 备注 |\n|---|---|---|---|\n' + row + '\n'
+    return text[:sec_start] + section + text[next_sec:]
 
 
 def mark_tasks(text: str, rel_paths: list[str]) -> str:
@@ -87,12 +100,24 @@ def append_candidates(new_files: list[Path], date_s: str) -> int:
         return 0
     cpath = ROOT / '.memory-work' / 'candidates.jsonl'
     cpath.parent.mkdir(parents=True, exist_ok=True)
+    existing_ids: set[str] = set()
+    if cpath.exists():
+        for line in cpath.read_text(encoding='utf-8').splitlines():
+            if not line.strip():
+                continue
+            try:
+                existing_ids.add(json.loads(line).get('id', ''))
+            except json.JSONDecodeError:
+                continue
     count = 0
     with cpath.open('a', encoding='utf-8') as f:
         for p in new_files:
+            cid = f'auto-{date_s}-{p.name}'
+            if cid in existing_ids:
+                continue
             head = '\n'.join(read_text(p).splitlines()[:20])
             rec = {
-                'id': f'auto-{date_s}-{p.name}',
+                'id': cid,
                 'source': 'sync_focus',
                 'date': date_s,
                 'file': relative_to_root(p),
