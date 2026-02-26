@@ -115,6 +115,28 @@ class MemoryReviewTests(unittest.TestCase):
             self.assertEqual(inserted, 1)
             final = mem.read_text(encoding="utf-8")
             self.assertIn("[new1]", final)
+            self.assertIn("- score:", final)
+
+    def test_score_and_confidence_mapping(self):
+        item = {"source": "weekly-heuristic", "hint": "用户每次先口述再结构化", "type": "dynamic"}
+        score = memory_review.score_candidate(item)
+        self.assertGreaterEqual(score, 0.6)
+        self.assertEqual(memory_review.confidence_from_score(0.4), 1)
+        self.assertEqual(memory_review.confidence_from_score(0.6), 2)
+        self.assertEqual(memory_review.confidence_from_score(0.8), 3)
+
+    def test_aggregate_candidates_merges_evidence(self):
+        merged = memory_review.aggregate_candidates(
+            [
+                {"id": "a1", "hint": "用户每次先口述再结构化", "source": "sync_focus", "type": "dynamic"},
+                {"id": "a2", "hint": "用户 每次 先口述再结构化", "source": "weekly-heuristic", "type": "dynamic"},
+            ]
+        )
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0]["evidence_count"], 2)
+        self.assertIn("sync_focus", merged[0]["sources"])
+        self.assertIn("weekly-heuristic", merged[0]["sources"])
+        self.assertGreaterEqual(float(merged[0]["score"]), 0.5)
 
 
 class WeekArchiveTests(unittest.TestCase):

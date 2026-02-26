@@ -19,7 +19,7 @@ cd /Users/zhang/Desktop/Claude/memory-work-codex
 ```bash
 ./scripts/run.sh sync light
 ./scripts/run.sh sync deep
-./scripts/run.sh review --from-log --interactive no
+./scripts/run.sh review --from-log --interactive no --min-score 0.35
 ./scripts/run.sh graduate --threshold 3
 ./scripts/run.sh archive --week 2026-W09
 ```
@@ -70,6 +70,10 @@ cd /Users/zhang/Desktop/Claude/memory-work-codex
   - 记忆毕业
   - 周归档
   - 完整性检查
+
+记忆评分说明：
+- `review` 新增 `--min-score`（0~1），用于过滤低质量候选。
+- 分数由来源、语义信号、证据次数综合计算，写入时会带 `score / evidence_count / confidence`。
 
 ## Obsidian
 
