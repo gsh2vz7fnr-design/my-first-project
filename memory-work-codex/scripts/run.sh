@@ -16,6 +16,7 @@ usage() {
   graduate [--threshold N]
   archive --week YYYY-Www
   export --input <file> --topic <title>
+  demo [--workspace /tmp/path]
   check [--strict]
   test
   help
@@ -52,6 +53,9 @@ case "$cmd" in
     ;;
   export)
     python3 "$ROOT/scripts/export_conversation.py" "$@"
+    ;;
+  demo)
+    "$ROOT/scripts/demo_week.sh" "$@"
     ;;
   check)
     python3 "$ROOT/scripts/integrity_check.py" "$@"

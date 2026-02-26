@@ -34,6 +34,11 @@ cd /Users/zhang/Desktop/Claude/memory-work-codex
 ./scripts/run.sh test
 ```
 
+6. 一键演示完整一周（不污染当前目录）
+```bash
+./scripts/run.sh demo
+```
+
 ## 目录
 
 - `AGENTS.md`：Codex 系统入口
@@ -50,6 +55,21 @@ cd /Users/zhang/Desktop/Claude/memory-work-codex
 1. 首次初始化
 2. 日常启动与同步
 3. 周末复盘与归档
+
+## 真实一周示例
+
+- 示例输入在 [sample_week/README.md](/Users/zhang/Desktop/Claude/memory-work-codex/sample_week/README.md)
+- 你可以直接执行：
+```bash
+./scripts/run.sh demo
+```
+- 演示脚本会在 `/tmp` 创建临时工作目录，自动跑：
+  - 初始化
+  - 深同步
+  - 记忆复盘
+  - 记忆毕业
+  - 周归档
+  - 完整性检查
 
 ## Obsidian
 
