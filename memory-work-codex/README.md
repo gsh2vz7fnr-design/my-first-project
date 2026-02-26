@@ -7,26 +7,31 @@ Codex 适配版的 Memory Work：保留原方法论，替换为 `AGENTS.md + 本
 1. 初始化
 ```bash
 cd /Users/zhang/Desktop/Claude/memory-work-codex
-./scripts/init.sh --lang zh-CN --user-name "你的名字"
+./scripts/run.sh init --lang zh-CN --user-name "你的名字"
 ```
 
 2. 启动工作
 ```bash
-./scripts/boot.sh --mode auto
+./scripts/run.sh boot --mode auto
 ```
 
 3. 周中/周末操作
 ```bash
-python3 scripts/sync_focus.py --mode light
-python3 scripts/sync_focus.py --mode deep
-python3 scripts/memory_review.py --from-log --interactive no
-python3 scripts/memory_graduate.py --threshold 3
-python3 scripts/week_archive.py --week 2026-W09
+./scripts/run.sh sync light
+./scripts/run.sh sync deep
+./scripts/run.sh review --from-log --interactive no
+./scripts/run.sh graduate --threshold 3
+./scripts/run.sh archive --week 2026-W09
 ```
 
 4. 完整性检查
 ```bash
-python3 scripts/integrity_check.py --strict
+./scripts/run.sh check --strict
+```
+
+5. 运行测试
+```bash
+./scripts/run.sh test
 ```
 
 ## 目录
@@ -35,6 +40,7 @@ python3 scripts/integrity_check.py --strict
 - `SOUL.md` / `USER.md` / `MEMORY.md`：记忆核心文件
 - `00 专注区/`：本周工作台、日志、归档
 - `scripts/`：自动化命令
+  - `run.sh`：统一命令入口（推荐）
 - `templates/`：初始化模板
 - `.memory-work/config.json`：系统配置
 

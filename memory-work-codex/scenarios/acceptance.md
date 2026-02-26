@@ -6,7 +6,7 @@
 ## 场景 1：首次初始化
 命令：
 ```bash
-./scripts/init.sh --lang zh-CN --user-name "Zhang" --force-templates
+./scripts/run.sh init --lang zh-CN --user-name "Zhang" --force-templates
 ```
 结果：
 - `integrity_check: OK`
@@ -15,8 +15,8 @@
 ## 场景 2：日常启动 + 深度同步
 命令：
 ```bash
-./scripts/boot.sh --mode auto
-python3 scripts/sync_focus.py --mode deep
+./scripts/run.sh boot --mode auto
+./scripts/run.sh sync deep
 ```
 准备：新增 `00 专注区/需求梳理.md`
 
@@ -28,10 +28,10 @@ python3 scripts/sync_focus.py --mode deep
 ## 场景 3：周末复盘 + 归档
 命令：
 ```bash
-python3 scripts/memory_review.py --from-log --interactive no --approve-all
-python3 scripts/memory_graduate.py --threshold 1
-python3 scripts/week_archive.py --week 2026-W09
-python3 scripts/integrity_check.py --strict
+./scripts/run.sh review --from-log --interactive no --approve-all
+./scripts/run.sh graduate --threshold 1
+./scripts/run.sh archive --week 2026-W09
+./scripts/run.sh check --strict
 ```
 结果：
 - 记忆复盘：`候选数: 1`，`写入数: 1`
@@ -42,7 +42,7 @@ python3 scripts/integrity_check.py --strict
 ## 附加：会话导出占位能力
 命令：
 ```bash
-python3 scripts/export_conversation.py --input /tmp/demo_conversation.md --topic 复盘示例
+./scripts/run.sh export --input /tmp/demo_conversation.md --topic 复盘示例
 ```
 结果：
 - 成功导出到 `01 你的项目/会话沉淀/` 目录
