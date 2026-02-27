@@ -39,6 +39,12 @@ cd /Users/zhang/Desktop/Claude/memory-work-codex
 ./scripts/run.sh demo
 ```
 
+7. 打开前端控制台
+```bash
+./scripts/run.sh ui 4173
+```
+浏览器访问：`http://127.0.0.1:4173`
+
 ## 目录
 
 - `AGENTS.md`：Codex 系统入口
@@ -48,6 +54,7 @@ cd /Users/zhang/Desktop/Claude/memory-work-codex
   - `run.sh`：统一命令入口（推荐）
 - `templates/`：初始化模板
 - `.memory-work/config.json`：系统配置
+- `frontend/`：可视化控制台（纯静态页面）
 
 ## 三段场景验收
 

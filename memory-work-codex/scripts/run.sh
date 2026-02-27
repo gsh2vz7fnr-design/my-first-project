@@ -17,6 +17,7 @@ usage() {
   archive --week YYYY-Www
   export --input <file> --topic <title>
   demo [--workspace /tmp/path]
+  ui [--port 4173]
   check [--strict]
   test
   help
@@ -56,6 +57,15 @@ case "$cmd" in
     ;;
   demo)
     "$ROOT/scripts/demo_week.sh" "$@"
+    ;;
+  ui)
+    port="${1:-4173}"
+    if [[ "$port" =~ ^--port$ ]]; then
+      port="${2:-4173}"
+    fi
+    cd "$ROOT/frontend"
+    echo "frontend 已启动: http://127.0.0.1:${port}"
+    python3 -m http.server "$port"
     ;;
   check)
     python3 "$ROOT/scripts/integrity_check.py" "$@"

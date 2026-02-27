@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Memory Work Codex Dashboard</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="bg-shape bg-a"></div>
+    <div class="bg-shape bg-b"></div>
+
+    <main class="app">
+      <header class="hero">
+        <p class="badge">Memory Work Codex</p>
+        <h1>知识管理控制台</h1>
+        <p class="subtitle">把一周流程收敛为可执行动作：启动、同步、复盘、毕业、归档。</p>
+      </header>
+
+      <section class="grid two">
+        <article class="card command-card">
+          <h2>快速命令</h2>
+          <div class="cmd-list" id="cmdList"></div>
+        </article>
+
+        <article class="card flow-card">
+          <h2>周节奏</h2>
+          <div class="tabs" id="phaseTabs"></div>
+          <div class="phase-panel" id="phasePanel"></div>
+        </article>
+      </section>
+
+      <section class="grid two">
+        <article class="card">
+          <h2>关键文件</h2>
+          <ul class="file-list" id="fileList"></ul>
+        </article>
+
+        <article class="card">
+          <h2>体验路径</h2>
+          <ol class="steps">
+            <li>先跑 <code>./scripts/run.sh demo</code> 快速看完整链路。</li>
+            <li>再跑 <code>init + boot</code> 进入真实周工作流。</li>
+            <li>周中用 <code>sync</code>，周末用 <code>review / graduate / archive</code>。</li>
+            <li>每次收尾跑 <code>check --strict</code> 和 <code>test</code>。</li>
+          </ol>
+          <button id="copyStarter" class="primary">复制完整体验命令</button>
+        </article>
+      </section>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
